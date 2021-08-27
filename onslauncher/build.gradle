@@ -50,7 +50,7 @@ dependencies {
 	
 
 	 implementation 'androidx.appcompat:appcompat:1.0.2'
-    
+    implementation 'androidx.annotation.annotation:1.1.0'
 
-    implementation fileTree(dir: 'libs', include: ['*.jar'])
+   // implementation fileTree(dir: 'libs', include: ['*.jar'])
 }
