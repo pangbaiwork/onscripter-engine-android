@@ -19,6 +19,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
 		 
 		//myi.putExtra("share", ag);
 	 startActivity(myi); 
+	 finish();
     }
 
 

@@ -25,17 +25,17 @@ public class play extends Activity {
         // Defined uri either content:// (external devices like sdcard) or file://
 		
         Uri uri = Uri.fromFile(new File(Environment.getExternalStorageDirectory()+"/assets/wan2/"));
-
+		Toast.makeText(getApplication(), uri.toString(), Toast.LENGTH_SHORT).show();
         mGame = new ONScripterView.Builder(getApplicationContext(), uri)
             // If you specify a screenshot folder name, relative to the save folder in game,
             // full sized screenshots are saved after each save
-           // .setScreenshotPath("")
+            .setScreenshotPath("")
             // Outline of text
             .useRenderOutline()
             // Plays higher quality audio
             .useHQAudio()
             // Set a default font path
-			//.setFontPath("default.ttf")
+			.setFontPath("default.ttf")
             .create();
         setContentView(mGame);
 
