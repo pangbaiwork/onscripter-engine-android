@@ -13,6 +13,7 @@ import android.widget.Toast;
 import android.util.Log;
 import android.content.Intent;
 import com.onscripter.exception.NativeONSException;
+import android.os.Environment;
 public class play extends Activity {
     private ONScripterView mGame;
 
@@ -22,7 +23,8 @@ public class play extends Activity {
     Log.e("play","跳转成功");
 
         // Defined uri either content:// (external devices like sdcard) or file://
-        Uri uri = Uri.fromFile(new File("/assets/wan2/"));
+		
+        Uri uri = Uri.fromFile(new File(Environment.getExternalStorageDirectory()+"/assets/wan2/"));
 
         mGame = new ONScripterView.Builder(getApplicationContext(), uri)
             // If you specify a screenshot folder name, relative to the save folder in game,
