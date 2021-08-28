@@ -27,13 +27,13 @@ public class play extends Activity {
         mGame = new ONScripterView.Builder(getApplicationContext(), uri)
             // If you specify a screenshot folder name, relative to the save folder in game,
             // full sized screenshots are saved after each save
-            .setScreenshotPath("")
+           // .setScreenshotPath("")
             // Outline of text
             .useRenderOutline()
             // Plays higher quality audio
             .useHQAudio()
             // Set a default font path
-			.setFontPath("/assets/wan2/default.ttf")
+			//.setFontPath("default.ttf")
             .create();
         setContentView(mGame);
 
