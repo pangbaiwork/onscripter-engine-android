@@ -14,18 +14,25 @@ import android.util.Log;
 import android.content.Intent;
 import com.onscripter.exception.NativeONSException;
 import android.os.Environment;
+import android.content.pm.ActivityInfo;
 public class play extends Activity {
     private ONScripterView mGame;
-
+	Uri uri ;
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
     Log.e("play","跳转成功");
-
-        // Defined uri either content:// (external devices like sdcard) or file://
+setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);//设置屏幕为横屏, 设置后会锁定方向
+		String uname=getIntent().getStringExtra("share");
 		
-        Uri uri = Uri.fromFile(new File(Environment.getExternalStorageDirectory()+"/assets/wan2/"));
-		Toast.makeText(getApplication(), uri.toString(), Toast.LENGTH_SHORT).show();
+		if(uname!=null){
+			 uri = Uri.fromFile(new File(Environment.getExternalStorageDirectory()+uname));
+		
+		}
+	  else{
+		  uri = Uri.fromFile(new File("/data/data/"+getPackageName() +"/files/"));
+		}
+	  Toast.makeText(getApplication(), uri.toString(), Toast.LENGTH_SHORT).show();
         mGame = new ONScripterView.Builder(getApplicationContext(), uri)
             // If you specify a screenshot folder name, relative to the save folder in game,
             // full sized screenshots are saved after each save
@@ -132,6 +139,8 @@ public class play extends Activity {
     protected void onResume() {
         super.onResume();
         if (mGame != null) {
+			setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);//设置屏幕为横屏, 设置后会锁定方向
+
             mGame.onResume();
         }
 
@@ -158,4 +167,8 @@ public class play extends Activity {
         // DO NOT EXIT APP HERE, DO IT BEFORE OR PREVIOUS ACTIVITY WILL FREEZE, will fix one day
         super.onDestroy();
     }
+	
+	
+	
+	
 }

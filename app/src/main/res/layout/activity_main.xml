@@ -10,5 +10,11 @@
 		android:text="Button"
 		android:id="@+id/activitymainButton1"/>
 
+	<EditText
+		android:layout_width="wrap_content"
+		android:ems="10"
+		android:layout_height="wrap_content"
+		android:id="@+id/activitymainEditText1"/>
+
 </LinearLayout>
 
