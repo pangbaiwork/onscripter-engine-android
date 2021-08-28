@@ -33,7 +33,7 @@ public class play extends Activity {
             // Plays higher quality audio
             .useHQAudio()
             // Set a default font path
-			.setFontPath("")
+			.setFontPath("/assets/wan2/default.ttf")
             .create();
         setContentView(mGame);
 
