@@ -1,5 +1,6 @@
 package com.pangbai.galdev;
  
+import com.pangbai.galdev.R;
 import android.app.Activity;
 import com.onscripter.ONScripterView;
 import android.os.Bundle;

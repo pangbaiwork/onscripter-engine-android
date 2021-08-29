@@ -32,7 +32,9 @@
             </intent-filter>
 
         </activity>
-		<activity android:name=".play"/>
+		<activity android:name=".play"
+			android:screenOrientation="landscape" 
+			android:configChanges="orientation|keyboardHidden"/>
         <meta-data
             android:name="android.max_aspect"
             android:value="4.0"/>

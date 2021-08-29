@@ -21,10 +21,11 @@ public class play extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-    Log.e("play","跳转成功");
-setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);//设置屏幕为横屏, 设置后会锁定方向
+		Log.e("play","跳转成功");
+		Toast.makeText(getApplication(), "跳转成功", Toast.LENGTH_SHORT).show();
+//setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);//设置屏幕为横屏, 设置后会锁定方向
 		String uname=getIntent().getStringExtra("share");
-		
+		Toast.makeText(getApplication(), uname, Toast.LENGTH_SHORT).show();
 		if(uname!=null){
 			 uri = Uri.fromFile(new File(Environment.getExternalStorageDirectory()+uname));
 		
@@ -139,7 +140,7 @@ setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);//设置屏�
     protected void onResume() {
         super.onResume();
         if (mGame != null) {
-			setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);//设置屏幕为横屏, 设置后会锁定方向
+	//		setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);//设置屏幕为横屏, 设置后会锁定方向
 
             mGame.onResume();
         }

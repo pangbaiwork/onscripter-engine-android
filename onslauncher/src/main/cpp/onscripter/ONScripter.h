@@ -2,7 +2,7 @@
  * 
  *  ONScripter.h - Execution block parser of ONScripter
  *
- *  Copyright (c) 2001-2016 Ogapee. All rights reserved.
+ *  Copyright (c) 2001-2020 Ogapee. All rights reserved.
  *
  *  ogapee@aqua.dti2.ne.jp
  *
@@ -27,17 +27,13 @@
 #include "ScriptParser.h"
 #include "DirtyRect.h"
 #include "ButtonLink.h"
-#include "FontInfo.h"
+#include <SDL.h>
 #include <SDL_image.h>
+#include <SDL_ttf.h>
 #include <SDL_mixer.h>
 #if defined(USE_SMPEG)
 #include <smpeg.h>
-#endif  
-
-#ifdef ANDROID
-#include <android/log.h>
-#include "jni_helper.h"
-#endif
+#endif    
 
 #define DEFAULT_VIDEO_SURFACE_FLAG (SDL_SWSURFACE)
 
@@ -77,97 +73,20 @@ public:
     ONScripter();
     ~ONScripter();
 
-#ifdef ANDROID
-
-// Menu text
-static const char* MESSAGE_SAVE_EXIST;
-static const char* MESSAGE_SAVE_EMPTY;
-static const char* MESSAGE_SAVE_CONFIRM;
-static const char* MESSAGE_LOAD_CONFIRM;
-static const char* MESSAGE_RESET_CONFIRM;
-static const char* MESSAGE_END_CONFIRM;
-static const char* MESSAGE_YES;
-static const char* MESSAGE_NO;
-static const char* MESSAGE_OK;
-static const char* MESSAGE_CANCEL;
-
-private:
-    typedef enum {
-        ANDROID_MSG_AUTO_MODE = 1,
-        ANDROID_MSG_SKIP_MODE = 2,
-        ANDROID_MSG_SINGLE_PAGE_MODE = 3,
-        ANDROID_MSG_CORRUPT_SAVE_FILE = 4,
-    } MessageType_t;
-
-public:
-    // Static Java Environment
-    static JavaVM *JNI_VM;
-    static jobject JavaONScripter;
-    static jmethodID JavaPlayVideo;
-    static jmethodID JavaReceiveMessage;
-    static jmethodID JavaSendException;
-    static jmethodID JavaSendReady;
-    static jmethodID JavaOnLoadFile;
-    static jmethodID JavaOnFinish;
-    static jmethodID JavaGetFD;
-    static jmethodID JavaGetStat;
-    static jmethodID JavaMkdir;
-    static jclass JavaONScripterClass;
-
-    static void setJavaEnv(JNIEnv * jniEnv, jobject thiz) {
-        if (JavaONScripter) {
-            jniEnv->DeleteGlobalRef(JavaONScripter);
-            JavaONScripter = NULL;
-        }
-        if (JavaONScripterClass) {
-            jniEnv->DeleteGlobalRef(JavaONScripterClass);
-            JavaONScripterClass = NULL;
-        }
-        JavaONScripter = jniEnv->NewGlobalRef(thiz);
-        JavaONScripterClass = (jclass)jniEnv->NewGlobalRef(jniEnv->GetObjectClass(JavaONScripter));
-        JavaPlayVideo = jniEnv->GetMethodID(JavaONScripterClass, "playVideo", "(Ljava/lang/String;ZZ)V");
-        JavaReceiveMessage = jniEnv->GetStaticMethodID(JavaONScripterClass,"receiveMessageFromNDK", "(IZ)V");
-        JavaOnLoadFile = jniEnv->GetMethodID(JavaONScripterClass,"onLoadFile", "(Ljava/lang/String;Ljava/lang/String;)V");
-        JavaOnFinish = jniEnv->GetMethodID(JavaONScripterClass,"onFinish", "()V");
-        JavaGetFD = jniEnv->GetMethodID(JavaONScripterClass, "getFD", "(Ljava/lang/String;I)I");
-        JavaGetStat = jniEnv->GetMethodID(JavaONScripterClass, "getStat", "(Ljava/lang/String;)J");
-        JavaMkdir = jniEnv->GetMethodID(JavaONScripterClass, "mkdir", "(Ljava/lang/String;)I");
-        JavaSendException = jniEnv->GetMethodID(JavaONScripterClass,"receiveException",
-            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V");
-        JavaSendReady = jniEnv->GetMethodID(JavaONScripterClass, "receiveReady", "()V");
-    }
-
-    static double Sentence_font_scale;
-    void invalidateSentenceFontSize() {
-        sentence_font.size_invalidated = true;
-    }
-
-    int getSentenceFontSize() {
-        return sentence_font.og_font_size_xy[1];
-    }
-
-    static bool Use_java_io;
-#endif
-
     // ----------------------------------------
     // start-up options
     void enableCDAudio();
     void setCDNumber(int cdrom_drive_number);
     void setFontFile(const char *filename);
-    void setScreenshotFolder(const char* folderPath);
     void setRegistryFile(const char *filename);
     void setDLLFile(const char *filename);
     void setArchivePath(const char *path);
     void setSaveDir(const char *path);
-#ifdef ANDROID
-    void enableHQAudio();
-#endif
     void setFullscreenMode();
     void setWindowMode();
     void enableButtonShortCut();
     void enableWheelDownAdvance();
     void disableRescale();
-    void useParentResources();
     void renderFontOutline();
     void enableEdit();
     void setKeyEXE(const char *path);
@@ -175,9 +94,6 @@ public:
     int  getHeight(){return screen_height;};
     ButtonState &getCurrentButtonState(){return current_button_state;};
     int  getSkip(){return automode_flag?2:((skip_mode&SKIP_NORMAL)?1:0);};
-#ifdef ANDROID
-    void setMenuLanguage(const char* languageStr);
-#endif
     AnimationInfo *getSMPEGInfo(){return smpeg_info;};
     
     int  openScript();
@@ -229,6 +145,8 @@ public:
     int spclclkCommand();
     int spbtnCommand();
     int skipoffCommand();
+    int showlangjpCommand();
+    int showlangenCommand();
     int sevolCommand();
     int setwindow3Command();
     int setwindow2Command();
@@ -285,6 +203,8 @@ public:
     int loadgameCommand();
     int ldCommand();
     int layermessageCommand();
+    int langjpCommand();
+    int langenCommand();
     int kinsokuCommand();
     int jumpfCommand();
     int jumpbCommand();
@@ -311,6 +231,7 @@ public:
     int getsavestrCommand();
     int getretCommand();
     int getregCommand();
+    int getreadlangCommand();
     int getpageupCommand();
     int getpageCommand();
     int getmp3volCommand();
@@ -379,10 +300,6 @@ public:
     int allsp2hideCommand();
     int allsphideCommand();
     int amspCommand();
-#ifdef ANDROID
-    void sendException(ScriptException& exception);
-    void sendReady();
-#endif
 
     void NSDCallCommand(int texnum, const char *str1, int proc, const char *str2);
     void NSDDeleteCommand(int texnum);
@@ -393,8 +310,7 @@ public:
     void NSDSetSpriteCommand(int spnum, int texnum, const char *tag);
 
     void stopSMPEG();
-
-    void startAndloadSaveFile(int no);
+    void updateEffect();
     
 private:
     // ----------------------------------------
@@ -419,7 +335,6 @@ private:
     // start-up options
     bool cdaudio_flag;
     char *default_font;
-    char *screenshot_folder;
     char *registry_file;
     char *dll_file;
     char *getret_str;
@@ -428,9 +343,6 @@ private:
     bool disable_rescale_flag;
     bool edit_flag;
     char *key_exe_file;
-#ifdef ANDROID
-    bool audio_high_quality;
-#endif
 
     // variables relevant to button
     ButtonState current_button_state, last_mouse_state;
@@ -509,7 +421,7 @@ private:
     void clearCurrentPage();
     void shadowTextDisplay( SDL_Surface *surface, SDL_Rect &clip );
     void newPage();
-    ButtonLink *getSelectableSentence( char *buffer, FontInfo *info, bool flush_flag = true, bool nofile_flag = false, bool single_line = false );
+    ButtonLink *getSelectableSentence( char *buffer, FontInfo *info, bool flush_flag = true, bool nofile_flag = false );
     void decodeExbtnControl( const char *ctl_str, SDL_Rect *check_src_rect=NULL, SDL_Rect *check_dst_rect=NULL );
     void saveAll();
     void loadEnvData();
@@ -518,41 +430,6 @@ private:
     void quit();
     void disableGetButtonFlag();
     int  getNumberFromBuffer( const char **buf );
-
-#ifdef ANDROID
-    size_t basicStringToUnicode(jchar* out, const char* text);
-
-    void setSentenceFontParamters(int sizeX, int sizeY) {
-        sentence_font.setFontParametersForScaling(sizeX, sizeY, Sentence_font_scale);
-    }
-
-    void setSentenceFontParamters(int sizeX, int sizeY, int spacingX, int spacingY) {
-        sentence_font.setFontParametersForScaling(sizeX, sizeY, spacingX, spacingY, Sentence_font_scale);
-    }
-
-    void updateSentenceFontSizes() {
-        sentence_font.updateFontScaling(Sentence_font_scale);
-    }
-
-    void reassureSentenceFontSize() {
-        // If sentence font size is invalidated, then update the scaling here
-        if (sentence_font.size_invalidated) {
-            sentence_font.size_invalidated = true;
-            updateSentenceFontSizes();
-
-            if ( !sentence_font.openFont( &font_cache, font_file, screen_ratio1, screen_ratio2 ) ){
-                quit();
-                errorAndExit( "can't open font file: %s\n", font_file );
-            }
-        }
-    }
-
-    void sendUserMessage(MessageType_t type);
-    void sendLoadFileEvent(char* filepath);
-#endif
-    void setInternalAutoMode(bool enabled);
-    void setInternalSkipMode(bool enabled);
-    void setInternalSinglePageMode(bool enabled);
 
     // ----------------------------------------
     // variables and methods relevant to animation
@@ -577,7 +454,7 @@ private:
     
     int  calcDurationToNextAnimation();
     void proceedAnimation(int current_time);
-    void setupAnimationInfo(AnimationInfo *anim, FontInfo *info=NULL, bool single_line=false, ScriptDecoder* decoder=NULL);
+    void setupAnimationInfo(AnimationInfo *anim, FontInfo *info=NULL);
     void parseTaggedString(AnimationInfo *anim );
     void drawTaggedSurface(SDL_Surface *dst_surface, AnimationInfo *anim, SDL_Rect &clip);
     void stopAnimation(int click);
@@ -590,8 +467,11 @@ private:
     int  effect_timer_resolution;
     int  effect_start_time;
     int  effect_start_time_old;
+    volatile bool update_effect;
     
-    bool setEffect( EffectLink *effect, bool generate_effect_dst, bool update_backup_surface );
+    void generateEffectSrc(bool update);
+    void generateEffectDst(int effect_no);
+    bool setEffect( EffectLink *effect );
     bool doEffect( EffectLink *effect, bool clear_dirty_region=true );
     void drawEffect( SDL_Rect *dst_rect, SDL_Rect *src_rect, SDL_Surface *surface );
     void generateMosaic( SDL_Surface *src_surface, int level );
@@ -609,6 +489,7 @@ private:
     void buildBreakupMask();
     void initBreakup( char *params );
     void effectBreakup( char *params, int duration );
+    void effectCascade( char *params, int duration );
 
     // ----------------------------------------
     // variables and methods relevant to event
@@ -660,8 +541,6 @@ private:
 
     int  loadSaveFile2( int file_version );
     void saveSaveFile2( bool output_flag );
-
-    int saveSaveScreenshot(int no);
     
     // ----------------------------------------
     // variables and methods relevant to image
@@ -691,8 +570,8 @@ private:
     SDL_Surface *accumulation_surface; // Final image, i.e. picture_surface (+ shadow + text_surface)
     SDL_Surface *backup_surface; // Final image w/o (shadow + text_surface) used in leaveTextDisplayMode()
     SDL_Surface *screen_surface; // Text + Select_image + Tachi image + background
-    SDL_Surface *effect_dst_surface; // Intermediate source buffer for effect
-    SDL_Surface *effect_src_surface; // Intermediate destnation buffer for effect
+    SDL_Surface *effect_src_surface; // Intermediate source buffer for effect
+    SDL_Surface *effect_dst_surface; // Intermediate destination buffer for effect
     SDL_Surface *screenshot_surface; // Screenshot
     int screenshot_w, screenshot_h;
     SDL_Surface *image_surface; // Reference for loadImage()
@@ -705,7 +584,7 @@ private:
     unsigned char *resize_buffer;
     size_t resize_buffer_size;
 
-    SDL_Surface *loadImage(char *filename, bool *has_alpha=NULL, int *location=NULL, unsigned char *alpha=NULL);
+    SDL_Surface *loadImage(char *filename, bool is_flipped, bool *has_alpha=NULL, int *location=NULL, unsigned char *alpha=NULL);
     SDL_Surface *createRectangleSurface(char *filename, bool *has_alpha, unsigned char *alpha=NULL);
     SDL_Surface *createSurfaceFromFile(char *filename,bool *has_alpha, int *location);
 
@@ -727,7 +606,7 @@ private:
 
     int  shelter_event_mode;
     int  shelter_display_mode;
-    bool shelter_draw_cursor_flag;
+    int  shelter_refresh_shadow_text_mode;
     Page *cached_page;
     ButtonLink *shelter_button_link;
     SelectLink *shelter_select_link;
@@ -801,6 +680,8 @@ private:
     unsigned char *layer_smpeg_buffer;
     bool layer_smpeg_loop_flag;
     AnimationInfo *smpeg_info;
+    AnimationInfo effect_src_info;
+    unsigned char *layer_alpha_buf; // alpha component of (movie) layer
 #if defined(USE_SMPEG)
     SMPEG* layer_smpeg_sample;
     SMPEG_Filter layer_smpeg_filter;
@@ -811,7 +692,7 @@ private:
     int playWave(Mix_Chunk *chunk, int format, bool loop_flag, int channel);
     int playMIDI(bool loop_flag);
     
-    int playMPEG(const char *filename, bool click_flag, bool loop_flag=false);
+    int playMPEG(const char *filename, bool click_flag, bool loop_flag=false, bool nosound_flag=false);
     int playAVI( const char *filename, bool click_flag );
     enum { WAVE_PLAY        = 0,
            WAVE_PRELOAD     = 1,
@@ -861,17 +742,16 @@ private:
     char *font_file;
     int erase_text_window_mode;
     bool text_on_flag; // suppress the effect of erase_text_window_mode
-    bool draw_cursor_flag;
     int  indent_offset;
-    FontInfo::FontContainer font_cache;
 
     void setwindowCore();
     
     void shiftHalfPixelX(SDL_Surface *surface);
     void shiftHalfPixelY(SDL_Surface *surface);
-    void drawGlyph( SDL_Surface *dst_surface, FontInfo *info, SDL_Color &color, char *text, int xy[2], AnimationInfo *cache_info, SDL_Rect *clip, SDL_Rect &dst_rect, ScriptDecoder* decoder  );
-    void drawChar( char* text, FontInfo *info, bool flush_flag, bool lookback_flag, SDL_Surface *surface, AnimationInfo *cache_info, SDL_Rect *clip=NULL, ScriptDecoder* decoder=NULL );
-    void drawString( const char *str, uchar3 color, FontInfo *info, bool flush_flag, SDL_Surface *surface, SDL_Rect *rect = NULL, AnimationInfo *cache_info=NULL, bool pack_hankaku=true, bool single_line=false, ScriptDecoder* decoder=NULL );
+    int  drawGlyph( SDL_Surface *dst_surface, FontInfo *info, SDL_Color &color, char *text, int xy[2], AnimationInfo *cache_info, SDL_Rect *clip, SDL_Rect &dst_rect );
+    void openFont(FontInfo *fi);
+    void drawChar( char* text, FontInfo *info, bool flush_flag, bool lookback_flag, SDL_Surface *surface, AnimationInfo *cache_info, SDL_Rect *clip=NULL );
+    void drawString( const char *str, uchar3 color, FontInfo *info, bool flush_flag, SDL_Surface *surface, SDL_Rect *rect = NULL, AnimationInfo *cache_info=NULL, bool pack_hankaku=true );
     void restoreTextBuffer(SDL_Surface *surface = NULL);
     void enterTextDisplayMode(bool text_flag = true);
     void leaveTextDisplayMode(bool force_leave_flag = false);
@@ -882,6 +762,7 @@ private:
     void endRuby(bool flush_flag, bool lookback_flag, SDL_Surface *surface, AnimationInfo *cache_info);
     int  textCommand();
     bool checkLineBreak(const char *buf, FontInfo *fi);
+    bool checkLigatureLineBreak(const char *buf, FontInfo *fi);
     void processEOT();
     bool processText();
 };

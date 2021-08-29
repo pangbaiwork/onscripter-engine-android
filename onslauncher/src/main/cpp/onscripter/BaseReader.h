@@ -2,7 +2,7 @@
  *
  *  BaseReader.h - Base class of archive reader
  *
- *  Copyright (c) 2001-2014 Ogapee. All rights reserved.
+ *  Copyright (c) 2001-2018 Ogapee. All rights reserved.
  *
  *  ogapee@aqua.dti2.ne.jp
  *
@@ -26,14 +26,10 @@
 
 #include <stdio.h>
 #ifdef ANDROID
-#include "ONScripter_log.h"
 extern "C" FILE *fopen_ons(const char *str, const char *mode);
-extern "C" int mkdir_ons(const char *str, mode_t mode);
-extern "C" int stat_ons(const char *str, struct stat * buf);
 #define fopen fopen_ons
+extern "C" int mkdir_ons(const char *pathname, mode_t mode);
 #define mkdir mkdir_ons
-#else
-#define stat_ons stat
 #endif
 
 #ifndef SEEK_END
