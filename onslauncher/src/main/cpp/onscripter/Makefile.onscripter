@@ -8,7 +8,6 @@ GUI_OBJS = ONScripter$(OBJSUFFIX) \
 	ONScripter_command$(OBJSUFFIX) \
 	ONScripter_effect$(OBJSUFFIX) \
 	ONScripter_effect_breakup$(OBJSUFFIX) \
-	ONScripter_effect_cascade$(OBJSUFFIX) \
 	ONScripter_event$(OBJSUFFIX) \
 	ONScripter_file$(OBJSUFFIX) \
 	ONScripter_file2$(OBJSUFFIX) \
@@ -20,25 +19,31 @@ GUI_OBJS = ONScripter$(OBJSUFFIX) \
 	AnimationInfo$(OBJSUFFIX) \
 	FontInfo$(OBJSUFFIX) \
 	DirtyRect$(OBJSUFFIX) \
-	Encoding$(OBJSUFFIX) \
 	resize_image$(OBJSUFFIX)
 
 DECODER_OBJS = DirectReader$(OBJSUFFIX) \
 	SarReader$(OBJSUFFIX) \
 	NsaReader$(OBJSUFFIX) \
-	sjis2utf16$(OBJSUFFIX)
+	sjis2utf16$(OBJSUFFIX) \
+	kr2utf$(OBJSUFFIX) \
+	gbk2utf$(OBJSUFFIX) \
+	backtrace$(OBJSUFFIX) \
+	ScriptException$(OBJSUFFIX) \
+	ScriptDecoder$(OBJSUFFIX)
 
 SARDEC_OBJS  = sardec$(OBJSUFFIX) \
 	DirectReader$(OBJSUFFIX) \
 	SarReader$(OBJSUFFIX) \
-	sjis2utf16$(OBJSUFFIX)
+	sjis2utf16$(OBJSUFFIX) \
+	kr2utf$(OBJSUFFIX)
 
 SARCONV_OBJS = sarconv$(OBJSUFFIX) \
 	conv_shared$(OBJSUFFIX) \
 	resize_image$(OBJSUFFIX) \
 	DirectReader$(OBJSUFFIX) \
 	SarReader$(OBJSUFFIX) \
-	sjis2utf16$(OBJSUFFIX)
+	sjis2utf16$(OBJSUFFIX) \
+	kr2utf$(OBJSUFFIX)
 
 NSADEC_OBJS  = nsadec$(OBJSUFFIX) \
 	$(DECODER_OBJS)
@@ -65,8 +70,7 @@ PARSER_HEADER = BaseReader.h \
 	AnimationInfo.h \
 	FontInfo.h \
 	DirtyRect.h \
-	LUAHandler.h \
-	Encoding.h
+	LUAHandler.h
 
 ONSCRIPTER_HEADER = ONScripter.h $(PARSER_HEADER)
 
@@ -100,7 +104,7 @@ clean:
 SarReader$(OBJSUFFIX):    BaseReader.h SarReader.h 
 NsaReader$(OBJSUFFIX):    BaseReader.h SarReader.h NsaReader.h 
 DirectReader$(OBJSUFFIX): BaseReader.h DirectReader.h
-ScriptHandler$(OBJSUFFIX): ScriptHandler.h Encoding.h
+ScriptHandler$(OBJSUFFIX): ScriptHandler.h
 ScriptParser$(OBJSUFFIX): $(PARSER_HEADER)
 ScriptParser_command$(OBJSUFFIX): $(PARSER_HEADER)
 
@@ -126,7 +130,7 @@ ONScripter_file2$(OBJSUFFIX): $(ONSCRIPTER_HEADER)
 ONScripter_image$(OBJSUFFIX): $(ONSCRIPTER_HEADER) resize_image.h
 ONScripter_lut$(OBJSUFFIX): $(ONSCRIPTER_HEADER)
 AnimationInfo$(OBJSUFFIX): AnimationInfo.h
-FontInfo$(OBJSUFFIX): FontInfo.h Encoding.h
+FontInfo$(OBJSUFFIX): FontInfo.h
 DirtyRect$(OBJSUFFIX) : DirtyRect.h
 AVIWrapper$(OBJSUFFIX): AVIWrapper.h
 LUAHandler$(OBJSUFFIX): $(ONSCRIPTER_HEADER) LUAHandler.h

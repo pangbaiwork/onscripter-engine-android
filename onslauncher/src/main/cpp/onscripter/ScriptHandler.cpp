@@ -2,7 +2,7 @@
  *
  *  ScriptHandler.cpp - Script manipulation class
  *
- *  Copyright (c) 2001-2020 Ogapee. All rights reserved.
+ *  Copyright (c) 2001-2016 Ogapee. All rights reserved.
  *
  *  ogapee@aqua.dti2.ne.jp
  *
@@ -22,9 +22,6 @@
  */
 
 #include "ScriptHandler.h"
-#ifdef ANDROID
-#include <android/log.h>
-#endif
 
 #define TMP_SCRIPT_BUF_LEN 4096
 #define STRING_BUFFER_LENGTH 4096
@@ -33,7 +30,6 @@
 
 ScriptHandler::ScriptHandler()
 {
-    current_language = 1; // Japanese
     save_dir = NULL;
     num_of_labels = 0;
     script_buffer = NULL;
@@ -41,10 +37,15 @@ ScriptHandler::ScriptHandler()
     log_info[LABEL_LOG].filename = "NScrllog.dat";
     log_info[FILE_LOG].filename  = "NScrflog.dat";
     clickstr_list = NULL;
+    decoder = NULL;
     
     string_buffer       = new char[STRING_BUFFER_LENGTH];
     str_string_buffer   = new char[STRING_BUFFER_LENGTH];
     saved_string_buffer = new char[STRING_BUFFER_LENGTH];
+#ifdef ANDROID
+    menuText = NULL;
+    setSystemLanguage("en");
+#endif
 
     variable_data = NULL;
     extended_variable_data = NULL;
@@ -69,6 +70,18 @@ ScriptHandler::~ScriptHandler()
     delete[] str_string_buffer;
     delete[] saved_string_buffer;
     if (variable_data) delete[] variable_data;
+
+    if (decoder) {
+        delete decoder;
+        decoder = NULL;
+    }
+
+#ifdef ANDROID
+    if (menuText) {
+        delete menuText;
+        menuText = NULL;
+    }
+#endif
 }
 
 void ScriptHandler::reset()
@@ -120,13 +133,14 @@ void ScriptHandler::reset()
     text_flag = true;
     linepage_flag = false;
     english_mode = false;
+    textgosub_flag = false;
     skip_enabled = false;
     if (clickstr_list){
         delete[] clickstr_list;
         clickstr_list = NULL;
     }
 
-    is_internal_script = true;
+    is_internal_script = false;
     ScriptContext *sc = root_script_context.next;
     while (sc){
         ScriptContext *tmp = sc;
@@ -189,64 +203,73 @@ const char *ScriptHandler::readToken()
   readTokenTop:
     string_counter = 0;
     char ch = *buf;
-    if (ch == ';' ||
-        (strncmp(buf, "langjp", 6) == 0 && current_language == 0) ||
-        (strncmp(buf, "langen", 6) == 0 && current_language == 1)){ // comment
+    if (ch == ';'){ // comment
         addStringBuffer( ch );
         do{
             ch = *++buf;
             addStringBuffer( ch );
-        } while (ch != 0x0a && ch != '\0');
+        } while ( ch != 0x0a && ch != '\0' );
     }
     else if (ch & 0x80 ||
              (ch >= '0' && ch <= '9') ||
              ch == '@' || ch == '\\' || ch == '/' ||
              ch == '%' || ch == '?' || ch == '$' ||
              ch == '[' || ch == '(' || ch == '<' ||
-             (enc.getEncoding() == Encoding::CODE_UTF8 &&
-              ch == enc.getTextMarker()) ||
 #ifndef ENABLE_1BYTE_CHAR
              ch == '`' ||
 #endif             
              (!english_mode && ch == '>') ||
              ch == '!' || ch == '#' || ch == ',' || ch == '"'){ // text
         bool ignore_clickstr_flag = false;
-        bool eng_flag = false;
         while(1){
-            int n = enc.getBytes(ch);
-            char *old_buf = buf;
-            if (n >= 2){
-                for (int i=0; i<n-1; i++){
-                    addStringBuffer(ch);
-                    ch = *++buf;
-                    if (ch == 0x0a || ch == '\0') break;
-                }
-                addStringBuffer(ch);
+            if ( !ScriptDecoder::isOneByte(ch) ){
+                addStringBuffer( ch );
+                ch = *++buf;
+                if (ch == 0x0a || ch == '\0') break;
+                addStringBuffer( ch );
                 buf++;
+#ifdef ENABLE_KOREAN
+                while(*buf == '\t') buf ++; // prevent to eliminate space character. : by shlee
+#endif
                 if (!wait_script && !ignore_clickstr_flag &&
-                    checkClickstr(old_buf) > 0)
+                    checkClickstr(buf-2) > 0)
                     wait_script = buf;
                 ignore_clickstr_flag = false;
             }
             else{
                 ignore_clickstr_flag = false;
-                if (!eng_flag && (ch == '%' || ch == '?')){
-                    addIntVariable(&buf);
-                    SKIP_SPACE(buf);
+                if (ch == '%' || ch == '?'){
+                    // To correct a common parsing error where non-English scripts are corrupted
+                    // followed by a 1-Byte '?' or '%', we ignore them if it is not followed by a number
+                    char nextChar = buf[1];
+                    if ('0' <= nextChar && nextChar <= '9') {
+                        addIntVariable(&buf);
+                        SKIP_SPACE(buf);
+                    } else {
+                        addStringBuffer( ch );
+                        if (nextChar == 0x0a) {
+                            // Caused by character corruption, most likely suppose to be clickwait
+                            ch = *buf = '\\';
+                            continue;
+                        } else if (nextChar == '\0') {
+                            break;
+                        }
+                        buf++;
+                    }
                 }
-                else if (!eng_flag && (ch == '$')){
+                else if (ch == '$'){
                     addStrVariable(&buf);
                     SKIP_SPACE(buf);
                 }
                 else{
-                    if (enc.getEncoding() == Encoding::CODE_UTF8 &&
-                        ch == enc.getTextMarker())
-                        eng_flag = !eng_flag;
+#ifdef ENABLE_1BYTE_CHAR
+                    if (ch == '`') break;
+#endif
                     if (ch == 0x0a || ch == '\0') break;
                     addStringBuffer( ch );
                     buf++;
                     if (ch == '_') ignore_clickstr_flag = true;
-                    if (!wait_script && !eng_flag && (ch == '@' || ch == '\\')) wait_script = buf;
+                    if (!wait_script && (ch == '@' || ch == '\\')) wait_script = buf;
                 }
             }
             ch = *buf;
@@ -258,11 +281,12 @@ const char *ScriptHandler::readToken()
     else if (ch == '`'){
         ch = *++buf;
         while (ch != '`' && ch != 0x0a && ch !='\0'){
-            int n = enc.getBytes(ch);
-            for (int i=0; i<n; i++){
-                addStringBuffer(ch);
+            if ( !ScriptDecoder::isOneByte(ch) ){
+                addStringBuffer( ch );
                 ch = *++buf;
             }
+            addStringBuffer( ch );
+            ch = *++buf;
         }
         if (ch == '`') buf++;
         
@@ -304,7 +328,7 @@ const char *ScriptHandler::readToken()
         markAsKidoku( buf++ );
     }
     else if (ch != '\0'){
-        fprintf(stderr, "readToken: skip unknown heading character %c (%x)\n", ch, ch);
+        logw(stderr, "readToken: skip unknown heading character %c (%x)\n", ch, ch);
         buf++;
         goto readTokenTop;
     }
@@ -409,13 +433,13 @@ void ScriptHandler::skipToken()
     bool quat_flag = false;
     bool text_flag = false;
     while(1){
-        if (*buf == 0x0a || *buf == 0 ||
-            (!quat_flag && !text_flag && (*buf == ':' || *buf == ';'))) break;
-        if (*buf == '"') quat_flag = !quat_flag;
-        int n = enc.getBytes(*buf);
-        if (n >= 2){
+        if ( *buf == 0x0a || *buf == 0 ||
+             (!quat_flag && !text_flag && (*buf == ':' || *buf == ';') ) ) break;
+        if ( *buf == '"' ) quat_flag = !quat_flag;
+        int n = decoder->getNumBytes(*buf);
+        if ( n >= 2 ) {
             buf += n;
-            if (!quat_flag) text_flag = true;
+            if ( !quat_flag ) text_flag = true;
         }
         else
             buf++;
@@ -460,7 +484,7 @@ void ScriptHandler::enterExternalScript(char *pos)
     sc->prev = last_script_context;
     last_script_context = sc;
     
-    is_internal_script = false;
+    is_internal_script = true;
     sc->current_script = current_script;
     current_script = pos;
     sc->next_script = next_script;
@@ -476,7 +500,7 @@ void ScriptHandler::leaveExternalScript()
     last_script_context = sc->prev;
     last_script_context->next = NULL;
     if (last_script_context->prev == NULL)
-        is_internal_script = true;
+        is_internal_script = false;
 
     current_script = sc->current_script;
     next_script = sc->next_script;
@@ -592,9 +616,34 @@ bool ScriptHandler::isKidoku()
     return skip_enabled;
 }
 
+#ifdef ANDROID
+void ScriptHandler::setSystemLanguage(const char* languageStr) {
+    if (menuText) {
+        delete menuText;
+        menuText = NULL;
+    }
+    if (!strcmp( languageStr, "ja")) {
+        menuText = new JapaneseMenu();
+#ifdef ENABLE_KOREAN
+    } else if (!strcmp( languageStr, "ko")) {
+        menuText = new KoreanMenu();
+#endif
+#ifdef ENABLE_CHINESE
+    } else if (!strcmp( languageStr, "zh")) {
+        menuText = new ChineseMenu();
+#endif
+    } else if (!strcmp( languageStr, "ru")) {
+        menuText = new RussianMenu();
+    } else {
+        // Default is English
+        menuText = new EnglishMenu();
+    }
+}
+#endif
+
 void ScriptHandler::markAsKidoku( char *address )
 {
-    if (!kidokuskip_flag || !is_internal_script) return;
+    if (!kidokuskip_flag || is_internal_script) return;
 
     int offset = current_script - script_buffer;
     if ( address ) offset = address - script_buffer;
@@ -616,7 +665,7 @@ void ScriptHandler::saveKidokuData()
     FILE *fp;
 
     if ( ( fp = fopen( "kidoku.dat", "wb", true ) ) == NULL ){
-        fprintf( stderr, "can't write kidoku.dat\n" );
+        logw( stderr, "can't write kidoku.dat\n" );
         return;
     }
 
@@ -660,6 +709,11 @@ void ScriptHandler::addStrVariable(char **buf)
     }
 }
 
+void ScriptHandler::enableTextgosub(bool val)
+{
+    textgosub_flag = val;
+}
+
 void ScriptHandler::setClickstr(const char *list)
 {
     if (clickstr_list) delete[] clickstr_list;
@@ -685,14 +739,11 @@ int ScriptHandler::checkClickstr(const char *buf, bool recursive_flag)
         }
 #endif
         if (double_byte_check){
-            unsigned short u1 = enc.getUTF16(click_buf);
-            unsigned short u2 = enc.getUTF16(buf);
-            int n = enc.getBytes(buf[0]);
-            if (u1 == u2){
-                if (!recursive_flag && checkClickstr(buf+n, true) > 0) return 0;
-                return n;
+            if ( click_buf[0] == buf[0] && click_buf[1] == buf[1] ){
+                if (!recursive_flag && checkClickstr(buf+2, true) > 0) return 0;
+                return 2;
             }
-            click_buf += n;
+            click_buf += 2;
         }
         else{
             if ( click_buf[0] == buf[0] ){
@@ -806,6 +857,9 @@ int ScriptHandler::getStringFromInteger( char *buffer, int no, int num_column, b
     }
 
 #if defined(ENABLE_1BYTE_CHAR) && defined(FORCE_1BYTE_CHAR)
+#ifdef ANDROID
+    if (!menuText->decoder->isMonospaced()) {
+#endif
     if (num_minus == 1) no = -no;
     char format[6];
     if (is_zero_inserted)
@@ -813,74 +867,57 @@ int ScriptHandler::getStringFromInteger( char *buffer, int no, int num_column, b
     else
         sprintf(format, "%%%dd", num_column);
     sprintf(buffer, format, no);
-    
     return num_column;
-#else
-    int code = enc.getEncoding();
-    int n = 2; // bytes per character
-    if (code == Encoding::CODE_UTF8)
-        n = 3;
+#ifdef ANDROID
+    }
+#endif
+#endif
     int c = 0;
     if (is_zero_inserted){
-        if (code == Encoding::CODE_CP932){
-            for (i=0; i<num_space; i++){
-                buffer[c++] = ((char*)"‚O")[0];
-                buffer[c++] = ((char*)"‚O")[1];
-            }
-        }
-        if (code == Encoding::CODE_UTF8){
-            for (i=0; i<num_space; i++){
-                buffer[c++] = 0xef;
-                buffer[c++] = 0xbc;
-                buffer[c++] = 0x90;
-            }
+        for (i=0 ; i<num_space ; i++){
+#ifdef ANDROID
+            buffer[c++] = menuText->get_numbers()[0];
+            buffer[c++] = menuText->get_numbers()[1];
+#else
+            buffer[c++] = ((char*)"‚O")[0];
+            buffer[c++] = ((char*)"‚O")[1];
+#endif
         }
     }
     else{
-        if (code == Encoding::CODE_CP932){
-            for (i=0; i<num_space; i++){
-                buffer[c++] = ((char*)"@")[0];
-                buffer[c++] = ((char*)"@")[1];
-            }
-        }
-        if (code == Encoding::CODE_UTF8){
-            for (i=0; i<num_space; i++){
-                buffer[c++] = 0xe3;
-                buffer[c++] = 0x80;
-                buffer[c++] = 0x80;
-            }
+        for (i=0 ; i<num_space ; i++){
+#ifdef ANDROID
+            buffer[c++] = menuText->get_space_char()[0];
+            buffer[c++] = menuText->get_space_char()[1];
+#else
+            buffer[c++] = ((char*)"@")[0];
+            buffer[c++] = ((char*)"@")[1];
+#endif
         }
     }
     if (num_minus == 1){
-        if (code == Encoding::CODE_CP932){
-            buffer[c++] = "|"[0];
-            buffer[c++] = "|"[1];
-        }
-        if (code == Encoding::CODE_UTF8){
-            buffer[c++] = 0xef;
-            buffer[c++] = 0xbc;
-            buffer[c++] = 0x8d;
-        }
+#ifdef ANDROID
+        buffer[c++] = menuText->get_dash_char()[0];
+        buffer[c++] = menuText->get_dash_char()[1];
+#else
+        buffer[c++] = "|"[0];
+        buffer[c++] = "|"[1];
+#endif
     }
-    c = (num_column-1)*n;
+    c = (num_column-1)*2;
+#ifdef ANDROID
+    const char* num_str = menuText->get_numbers();
+#else
     char num_str[] = "‚O‚P‚Q‚R‚S‚T‚U‚V‚W‚X";
-    for (i=0; i<num_digit; i++){
-        if (code == Encoding::CODE_CP932){
-            buffer[c]   = num_str[no % 10 * 2];
-            buffer[c+1] = num_str[no % 10 * 2 + 1];
-        }
-        if (code == Encoding::CODE_UTF8){
-            buffer[c]   = 0xef;
-            buffer[c+1] = 0xbc;
-            buffer[c+2] = 0x90 + no%10;
-        }
+#endif
+    for (i=0 ; i<num_digit ; i++){
+        buffer[c]   = num_str[ no % 10 * 2];
+        buffer[c+1] = num_str[ no % 10 * 2 + 1];
         no /= 10;
-        c -= n;
+        c -= 2;
     }
-    buffer[num_column*n] = '\0';
-
-    return num_column*n;
-#endif    
+    buffer[num_column*2] = '\0';
+    return num_column*2;
 }
 
 int ScriptHandler::openScript(char *path)
@@ -968,14 +1005,28 @@ void ScriptHandler::addStrAlias( const char *str1, const char *str2 )
     last_str_alias = last_str_alias->next;
 }
 
-void ScriptHandler::errorAndExit( const char *str )
+void ScriptHandler::errorAndExit()
 {
 #ifdef ANDROID
-    __android_log_print(ANDROID_LOG_ERROR, "ONS", " **** Script error, %s [%s] ***", str, string_buffer );
+    throw ScriptException();
 #else
-    fprintf( stderr, " **** Script error, %s [%s] ***\n", str, string_buffer );
-#endif
     exit(-1);
+#endif
+}
+
+void ScriptHandler::errorAndExit( const char* fmt, ... )
+{
+    va_list ap;
+    char buf[1024];
+    va_start(ap, fmt);
+    vsnprintf(buf, 1024, fmt, ap);
+#ifdef ANDROID
+    throw ScriptException(buf);
+#else
+    loge( stderr, " **** Script error, %s ***", buf );
+    exit(-1);
+#endif
+    va_end(ap);
 }
 
 void ScriptHandler::addStringBuffer( char ch )
@@ -1013,7 +1064,6 @@ ScriptHandler::VariableData &ScriptHandler::getVariableData(int no)
 
 // ----------------------------------------
 // Private methods
-
 int ScriptHandler::readScript( char *path )
 {
     archive_path = new char[strlen(path) + 1];
@@ -1037,13 +1087,9 @@ int ScriptHandler::readScript( char *path )
     else if ((fp = fopen("nscript.dat", "rb")) != NULL){
         encrypt_mode = 1;
     }
-    else if ((fp = fopen("pscript.dat", "rb")) != NULL){
-        encrypt_mode = 1;
-        enc.setEncoding(Encoding::CODE_UTF8);
-    }
 
     if (fp == NULL){
-        fprintf( stderr, "can't open any of 0.txt, 00.txt, nscript.dat and nscript.___\n" );
+        loge( stderr, "can't open any of 0.txt, 00.txt, nscript.dat and nscript.___\n" );
         return -1;
     }
     
@@ -1095,6 +1141,15 @@ int ScriptHandler::readScript( char *path )
 
     script_buffer_length = p_script_buffer - script_buffer;
 
+    if (!decoder) {
+        decoder = ScriptDecoder::detectAndAllocateScriptDecoder(script_buffer, script_buffer_length);
+        if (decoder) {
+            logv("Decoder: %s", decoder->getName());
+        } else {
+            logw(stderr, "Could not detect script language, choosing Japanese by default...");
+            decoder = new JapaneseDecoder();
+        }
+    }
     return 0;
 }
 
@@ -1132,15 +1187,15 @@ int ScriptHandler::readScriptSub( FILE *fp, char **buf, int encrypt_mode )
         if ( cr_flag && ch != 0x0a ){
             *(*buf)++ = 0x0a;
             newline_flag = true;
+            newlabel_flag = false;
             cr_flag = false;
         }
     
-        if ( ch == '*' && newline_flag && !newlabel_flag){
+        // Accept multiple labels on the same line, even though the extra label is useless
+        if ( ch == '*' && ((newline_flag && !newlabel_flag) || newlabel_flag)) {
             num_of_labels++;
             newlabel_flag = true;
         }
-        else
-            newlabel_flag = false;
 
         if ( ch == 0x0d ){
             cr_flag = true;
@@ -1149,6 +1204,7 @@ int ScriptHandler::readScriptSub( FILE *fp, char **buf, int encrypt_mode )
         if ( ch == 0x0a ){
             *(*buf)++ = 0x0a;
             newline_flag = true;
+            newlabel_flag = false;
             cr_flag = false;
         }
         else{
@@ -1170,12 +1226,11 @@ void ScriptHandler::readConfiguration()
     char *buf = script_buffer;
     while ( buf < script_buffer + script_buffer_length ){
         if (*buf == ';') break;
-        if (IS_TWO_BYTE(*buf)) buf++;
-        buf++;
+        buf += decoder->getNumBytes(*buf);
     }
-    
+
     while ( ++buf >= script_buffer + script_buffer_length ) return;
-    
+
     SKIP_SPACE(buf);
     bool config_flag = false;
     if (buf[0] == '$'){
@@ -1201,11 +1256,6 @@ void ScriptHandler::readConfiguration()
                 screen_width  = 320;
                 screen_height = 240;
                 buf += 3;
-            }
-            else if (!strncmp( buf, "w720", 4 )){
-                screen_width  = 1280;
-                screen_height = 720;
-                buf += 4;
             }
             else
                 break;
@@ -1258,6 +1308,12 @@ int ScriptHandler::labelScript()
     char *buf = script_buffer;
     label_info = new LabelInfo[ num_of_labels+1 ];
 
+    // Avoid the file byte order marks (utf8) and skip to first ';', '\n', or '*'
+    while ( buf < script_buffer + script_buffer_length ){
+        if (*buf == ';' || *buf == '*' || *buf == '\n') break;
+        buf++;
+    }
+
     while ( buf < script_buffer + script_buffer_length ){
         SKIP_SPACE( buf );
         if ( *buf == '*' ){
@@ -1293,19 +1349,33 @@ int ScriptHandler::labelScript()
 
 int ScriptHandler::findLabel( const char *label )
 {
-    char buf[256];
+    int i;
+    char capital_label[256];
 
-    for (int i=0; i<(int)strlen(label)+1; i++){
-        buf[i] = label[i];
-        if ('A' <= buf[i] && buf[i] <= 'Z') buf[i] += 'a' - 'A';
+    for ( i=0 ; i<(int)strlen( label )+1 ; i++ ){
+        capital_label[i] = label[i];
+        if ( 'A' <= capital_label[i] && capital_label[i] <= 'Z' ) capital_label[i] += 'a' - 'A';
     }
-    for (int i=num_of_labels-1; i>=0; --i){
-        if (strcmp(label_info[i].name, buf) == 0)
+    for ( i=0 ; i<num_of_labels ; i++ ){
+        if ( !strcmp( label_info[i].name, capital_label ) )
             return i;
     }
 
-    sprintf(buf, "Label \"%s\" is not found.", label);
-    errorAndExit(buf);
+#ifdef ENABLE_KOREAN
+    if (!strcmp(label, KOREAN_LABEL_END)
+        || !strcmp(label, KOREAN_LABEL_END2)) {
+        errorAndExit();
+    }
+    // Specific hack for broken Korean translated game 'Princess Frontier'
+    if (!strcmp(label, "l_badend")) {
+        logw(stderr, "Was not able to find l_badend, applying a hack by using 'l_bad_end' instead");
+        return findLabel("l_bad_end");
+    }
+#endif
+
+    char *p = new char[ strlen(label) + 32 ];
+    sprintf(p, "Label \"%s\" is not found.", label);
+    errorAndExit( p );
     
     return -1; // dummy
 }
@@ -1406,6 +1476,7 @@ void ScriptHandler::parseStr( char **buf )
         char ch, alias_buf[512];
         int alias_buf_len = 0;
         bool first_flag = true;
+        char* search_start = *buf;
         
         while(1){
             if ( alias_buf_len == 511 ) break;
@@ -1444,10 +1515,42 @@ void ScriptHandler::parseStr( char **buf )
             p_str_alias = p_str_alias->next;
         }
         if ( !p_str_alias ){
-            printf("can't find str alias for %s...\n", alias_buf );
-            //exit(-1);
-            str_string_buffer[0] = '\0';
-            current_variable.type = VAR_NONE;
+#ifdef ANDROID
+            /*
+             * We will be forgiving if the author tried to do "goto *label" but forgot the asterisk
+             * otherwise, we will exit the app. Rollback and see if goto is before this
+             */
+            char* search_buf = search_start;
+
+            // Scan backwards and ignore whitespace
+            while(*(--search_buf) == ' ');
+
+            // If we are at the beginning of the line, it failed
+            if (*search_buf != '\n') {
+                int word_length = 0;
+                // Again scan back till we hit whitespace or new line (the beginning of the line)
+                while(*search_buf != ' ' && *search_buf != '\n' && *search_buf != ':') {
+                    search_buf--;
+                    word_length++;
+                }
+                // Now see if the text before is "goto"
+                if (word_length > 0) {
+                    char text_before[512];
+                    strncpy(text_before, search_buf + 1, word_length);
+                    text_before[word_length] = '\0';
+                    if (strcmp(text_before, "goto") == 0) {
+                        // Now we need to insert an asterisk and continue execution, then put back the space
+                        char* new_buf = --search_start;
+                        *search_start = '*';
+                        parseStr(&new_buf);
+                        *search_start = ' ';
+                        current_variable.type |= VAR_CONST;
+                        return;
+                    }
+                }
+            }
+#endif
+            errorAndExit("can't find str alias for %s...\n", alias_buf );
         }
         current_variable.type |= VAR_CONST;
     }

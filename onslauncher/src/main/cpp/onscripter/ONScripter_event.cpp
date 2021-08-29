@@ -2,7 +2,7 @@
  * 
  *  ONScripter_event.cpp - Event handler of ONScripter
  *
- *  Copyright (c) 2001-2020 Ogapee. All rights reserved.
+ *  Copyright (c) 2001-2016 Ogapee. All rights reserved.
  *
  *  ogapee@aqua.dti2.ne.jp
  *
@@ -34,6 +34,7 @@
 #define ONS_CHUNK_EVENT   (SDL_USEREVENT+4)
 #define ONS_BREAK_EVENT   (SDL_USEREVENT+5)
 #define ONS_BGMFADE_EVENT (SDL_USEREVENT+6)
+#define ONS_LOAD_EVENT    (SDL_USEREVENT+7)
 
 // This sets up the fade event flag for use in bgm fadeout and fadein.
 #define BGM_FADEOUT 0
@@ -41,6 +42,8 @@
 
 #define EDIT_MODE_PREFIX "[EDIT MODE]  "
 #define EDIT_SELECT_STRING "MP3 vol (m)  SE vol (s)  Voice vol (v)  Numeric variable (n)"
+
+#define MENU_MODE (WAIT_TIMER_MODE | WAIT_INPUT_MODE | WAIT_BUTTON_MODE)
 
 static SDL_TimerID timer_id = NULL;
 SDL_TimerID timer_cdaudio_id = NULL;
@@ -370,8 +373,7 @@ bool ONScripter::waitEvent( int count )
     
     while(1){
         waitEventSub( count );
-        if (system_menu_mode == SYSTEM_NULL ||
-            script_h.isExternalScript()) break;
+        if ( system_menu_mode == SYSTEM_NULL ) break;
         int ret = executeSystemCall();
         if      (ret == 1) return true;
         else if (ret == 2) return false;
@@ -403,7 +405,7 @@ extern "C" void waveCallback( int channel )
 
 bool ONScripter::trapHandler()
 {
-    if (event_mode & WAIT_BUTTON_MODE || 
+    if (event_mode & WAIT_BUTTON_MODE ||
         event_mode & WAIT_TEXT_MODE) return false;
 
     if (trap_mode & TRAP_STOP){
@@ -412,10 +414,19 @@ bool ONScripter::trapHandler()
     }
     
     trap_mode = TRAP_NONE;
+    stopAnimation( clickstr_state );
     setCurrentLabel( trap_dist );
     current_button_state.button = 0; // to escape from screen effect
 
     return true;
+}
+
+void ONScripter::startAndloadSaveFile(int no)
+{
+    SDL_Event event;
+    event.type = ONS_LOAD_EVENT;
+    event.user.code = no;
+    SDL_PushEvent(&event);
 }
 
 /* **************************************** *
@@ -442,9 +453,9 @@ bool ONScripter::mouseMoveEvent( SDL_MouseMotionEvent *event )
 bool ONScripter::mousePressEvent( SDL_MouseButtonEvent *event )
 {
     if ( variable_edit_mode ) return false;
-    
+
     if ( automode_flag ){
-        automode_flag = false;
+        setInternalAutoMode(false);
         return false;
     }
 
@@ -456,7 +467,7 @@ bool ONScripter::mousePressEvent( SDL_MouseButtonEvent *event )
     current_button_state.x = event->x * screen_width / screen_device_width;
     current_button_state.y = event->y * screen_width / screen_device_width;
     current_button_state.down_flag = false;
-    skip_mode &= ~SKIP_NORMAL;
+    setInternalSkipMode(false);
 
     if ( event->button == SDL_BUTTON_RIGHT &&
          event->type == SDL_MOUSEBUTTONUP &&
@@ -469,6 +480,20 @@ bool ONScripter::mousePressEvent( SDL_MouseButtonEvent *event )
                 system_menu_mode = SYSTEM_MENU;
             else
                 system_menu_mode = SYSTEM_WINDOWERASE;
+        }
+
+        // When menu might be triggered, copy screen to screenshot
+        if ( screenshot_folder && (event_mode & MENU_MODE) == MENU_MODE ){
+#ifdef USE_SDL_RENDERER
+            SDL_Rect rect = {(device_width -screen_device_width)/2,
+                     (device_height-screen_device_height)/2,
+                     screen_device_width, screen_device_height};
+            SDL_LockSurface(screenshot_surface);
+            SDL_RenderReadPixels(renderer, &rect, screenshot_surface->format->format, screenshot_surface->pixels, screenshot_surface->pitch);
+            SDL_UnlockSurface(screenshot_surface);
+#else
+            SDL_BlitSurface(screen_surface, NULL, screenshot_surface, NULL);
+#endif
         }
     }
     else if ( event->button == SDL_BUTTON_LEFT &&
@@ -495,7 +520,7 @@ bool ONScripter::mousePressEvent( SDL_MouseButtonEvent *event )
                 flush( refreshMode() );
             }
         }
-            
+
         if ( event->type == SDL_MOUSEBUTTONDOWN )
             current_button_state.down_flag = true;
     }
@@ -531,6 +556,7 @@ bool ONScripter::mousePressEvent( SDL_MouseButtonEvent *event )
         if (!(event_mode & (WAIT_TEXT_MODE)))
             skip_mode |= SKIP_TO_EOL;
         playClickVoice();
+        stopAnimation( clickstr_state );
 
         return true;
     }
@@ -754,6 +780,7 @@ bool ONScripter::keyDownEvent( SDL_KeyboardEvent *event )
   ctrl_pressed:
     current_button_state.button  = 0;
     playClickVoice();
+    stopAnimation( clickstr_state );
 
     return true;
 }
@@ -800,7 +827,7 @@ bool ONScripter::keyPressEvent( SDL_KeyboardEvent *event )
     current_button_state.button = 0;
     current_button_state.down_flag = false;
     if ( automode_flag ){
-        automode_flag = false;
+        setInternalAutoMode(false);
         return false;
     }
     
@@ -820,7 +847,7 @@ bool ONScripter::keyPressEvent( SDL_KeyboardEvent *event )
     }
     
     if (event->type == SDL_KEYUP)
-        skip_mode &= ~SKIP_NORMAL;
+        setInternalSkipMode(false);
     
     if ( shift_pressed_status && event->keysym.sym == SDLK_q && current_mode == NORMAL_MODE ){
         endCommand();
@@ -876,6 +903,7 @@ bool ONScripter::keyPressEvent( SDL_KeyboardEvent *event )
             sprintf(current_button_state.str, "SPACE");
         }
         playClickVoice();
+        stopAnimation( clickstr_state );
 
         return true;
     }
@@ -892,6 +920,20 @@ bool ONScripter::keyPressEvent( SDL_KeyboardEvent *event )
                     system_menu_mode = SYSTEM_MENU;
                 else
                     system_menu_mode = SYSTEM_WINDOWERASE;
+            }
+
+            // When menu might be triggered, copy screen to screenshot
+            if ( screenshot_folder && (event_mode & MENU_MODE) == MENU_MODE ){
+#ifdef USE_SDL_RENDERER
+                SDL_Rect rect = {(device_width -screen_device_width)/2,
+                     (device_height-screen_device_height)/2,
+                     screen_device_width, screen_device_height};
+                SDL_LockSurface(screenshot_surface);
+                SDL_RenderReadPixels(renderer, &rect, screenshot_surface->format->format, screenshot_surface->pixels, screenshot_surface->pitch);
+                SDL_UnlockSurface(screenshot_surface);
+#else
+                SDL_BlitSurface(screen_surface, NULL, screenshot_surface, NULL);
+#endif
             }
         }
         else if ( useescspc_flag && event->keysym.sym == SDLK_ESCAPE ){
@@ -998,8 +1040,11 @@ bool ONScripter::keyPressEvent( SDL_KeyboardEvent *event )
             sprintf(current_button_state.str, "SHIFT");
         }
         
-        if ( current_button_state.button != 0 )
+        if ( current_button_state.button != 0 ){
+            stopAnimation( clickstr_state );
+
             return true;
+        }
     }
 
     if ( event_mode & WAIT_INPUT_MODE &&
@@ -1010,6 +1055,7 @@ bool ONScripter::keyPressEvent( SDL_KeyboardEvent *event )
             if (!(event_mode & WAIT_TEXT_MODE))
                 skip_mode |= SKIP_TO_EOL;
             playClickVoice();
+            stopAnimation( clickstr_state );
 
             return true;
         }
@@ -1017,24 +1063,26 @@ bool ONScripter::keyPressEvent( SDL_KeyboardEvent *event )
     
     if ( event_mode & WAIT_INPUT_MODE ){
         if (event->keysym.sym == SDLK_s && !automode_flag ){
-            skip_mode |= SKIP_NORMAL;
-            printf("toggle skip to true\n");
+            setInternalSkipMode(true);
+            logv("toggle skip to true\n");
+            stopAnimation( clickstr_state );
 
             return true;
         }
         else if (event->keysym.sym == SDLK_o){
-            if (skip_mode & SKIP_TO_EOP)
-                skip_mode &= ~SKIP_TO_EOP;
-            else
-                skip_mode |= SKIP_TO_EOP;
-            printf("toggle draw one page flag to %s\n", (skip_mode & SKIP_TO_EOP?"true":"false") );
-            if ( skip_mode & SKIP_TO_EOP )
+            setInternalSinglePageMode((skip_mode & SKIP_TO_EOP) == 0);
+            logv("toggle draw one page flag to %s\n", (skip_mode & SKIP_TO_EOP?"true":"false") );
+            if ( skip_mode & SKIP_TO_EOP ){
+                stopAnimation( clickstr_state );
+
                 return true;
+            }
         }
         else if ( event->keysym.sym == SDLK_a && !automode_flag ){
-            automode_flag = true;
-            skip_mode &= ~SKIP_NORMAL;
-            printf("change to automode\n");
+            setInternalAutoMode(true);
+            setInternalSkipMode(false);
+            logv("change to automode\n");
+            stopAnimation( clickstr_state );
 
             return true;
         }
@@ -1062,7 +1110,6 @@ bool ONScripter::keyPressEvent( SDL_KeyboardEvent *event )
             else                   menu_fullCommand();
         }
     }
-
     return false;
 }
 
@@ -1313,8 +1360,10 @@ void ONScripter::runEventLoop()
 
             if (event_mode & (WAIT_INPUT_MODE | WAIT_BUTTON_MODE) && 
                 ( clickstr_state == CLICK_WAIT || 
-                  clickstr_state == CLICK_NEWPAGE ) )
-                playClickVoice();
+                  clickstr_state == CLICK_NEWPAGE ) ){
+                playClickVoice(); 
+                stopAnimation( clickstr_state ); 
+            }
 
             return;
             
@@ -1342,7 +1391,26 @@ void ONScripter::runEventLoop()
             SDL_UpdateRect( screen_surface, 0, 0, screen_width, screen_height );
 #endif
             break;
+          case ONS_LOAD_EVENT:
+            if ( !loadSaveFile( event.user.code ) ){
+                dirty_rect.fill( screen_width, screen_height );
+                refreshSurface(backup_surface, &dirty_rect.bounding_box, REFRESH_NORMAL_MODE);
+                flush( refreshMode() );
 
+                saveon_flag = true;
+                internal_saveon_flag = true;
+                setInternalSkipMode(false);
+                setInternalAutoMode(false);
+                deleteButtonLink();
+                deleteSelectLink();
+                text_on_flag = false;
+                indent_offset = 0;
+                line_enter_status = 0;
+                page_enter_status = 0;
+                string_buffer_offset = 0;
+                break_flag = false;
+            }
+            break;
           case SDL_QUIT:
             endCommand();
             break;

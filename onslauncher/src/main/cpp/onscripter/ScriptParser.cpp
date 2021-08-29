@@ -2,7 +2,7 @@
  *
  *  ScriptParser.cpp - Define block parser of ONScripter
  *
- *  Copyright (c) 2001-2020 Ogapee. All rights reserved.
+ *  Copyright (c) 2001-2016 Ogapee. All rights reserved.
  *
  *  ogapee@aqua.dti2.ne.jp
  *
@@ -31,11 +31,17 @@ extern "C"
 #endif
 
 #define VERSION_STR1 "ONScripter"
-#define VERSION_STR2 "Copyright (C) 2001-2020 Studio O.G.A. All Rights Reserved."
+#define VERSION_STR2 "Copyright (C) 2001-2016 Studio O.G.A. All Rights Reserved."
 
+#ifdef ANDROID
+const char* ScriptParser::DEFAULT_SAVE_MENU_NAME = NULL;
+const char* ScriptParser::DEFAULT_LOAD_MENU_NAME = NULL;
+const char* ScriptParser::DEFAULT_SAVE_ITEM_NAME = NULL;
+#else
 #define DEFAULT_SAVE_MENU_NAME "＜セーブ＞"
 #define DEFAULT_LOAD_MENU_NAME "＜ロード＞"
 #define DEFAULT_SAVE_ITEM_NAME "しおり"
+#endif
 
 #define DEFAULT_TEXT_SPEED_LOW    40
 #define DEFAULT_TEXT_SPEED_MIDDLE 20
@@ -43,10 +49,9 @@ extern "C"
 
 #define MAX_PAGE_LIST 16
 
-extern void initSJIS2UTF16();
-
 ScriptParser::ScriptParser()
 {
+    globalon_flag = false;
     debug_level = 0;
     srand( time(NULL) );
     rand();
@@ -73,9 +78,13 @@ ScriptParser::ScriptParser()
     file_io_buf_len = 0;
     save_data_len = 0;
 
-    current_read_language = 1;
     render_font_outline = false;
+    use_parent_resources = false;
     page_list = NULL;
+
+#ifdef ANDROID
+    setMenuLanguage("en");
+#endif
 
     /* ---------------------------------------- */
     /* Sound related variables */
@@ -87,11 +96,9 @@ ScriptParser::ScriptParser()
     for ( i=0 ; i<MENUSELECTVOICE_NUM ; i++ )
         menuselectvoice_file_name[i] = NULL;
 
-    initSJIS2UTF16();
-    
     start_kinsoku = end_kinsoku = NULL;
     num_start_kinsoku = num_end_kinsoku = 0;
-    setKinsoku(DEFAULT_START_KINSOKU, DEFAULT_END_KINSOKU, false, Encoding::CODE_CP932);
+    setKinsoku(DEFAULT_START_KINSOKU, DEFAULT_END_KINSOKU, false);
 }
 
 ScriptParser::~ScriptParser()
@@ -176,17 +183,17 @@ void ScriptParser::reset()
 
     /* ---------------------------------------- */
     /* Save/Load related variables */
-    setStr(&save_menu_name, DEFAULT_SAVE_MENU_NAME, -1, true);
-    setStr(&load_menu_name, DEFAULT_LOAD_MENU_NAME, -1, true);
-    setStr(&save_item_name, DEFAULT_SAVE_ITEM_NAME, -1, true);
+    setStr( &save_menu_name, DEFAULT_SAVE_MENU_NAME );
+    setStr( &load_menu_name, DEFAULT_LOAD_MENU_NAME );
+    setStr( &save_item_name, DEFAULT_SAVE_ITEM_NAME );
     num_save_file = 9;
 
     /* ---------------------------------------- */
     /* Text related variables */
-    sentence_font.reset(&script_h.enc);
-    menu_font.reset(&script_h.enc);
-    ruby_font.reset(&script_h.enc);
-    dialog_font.reset(&script_h.enc);
+    sentence_font.reset();
+    menu_font.reset();
+    ruby_font.reset();
+    dialog_font.reset();
 
     current_font = &sentence_font;
     shade_distance[0] = 1;
@@ -197,7 +204,6 @@ void ScriptParser::reset()
     default_text_speed[2] = DEFAULT_TEXT_SPEED_HIGHT;
     max_page_list = MAX_PAGE_LIST+1;
     num_chars_in_sentence = 0;
-    current_read_language = 1;
     if (page_list){
         delete[] page_list;
         page_list = NULL;
@@ -220,23 +226,31 @@ void ScriptParser::reset()
 
     /* ---------------------------------------- */
     /* Menu related variables */
-    menu_font.font_size_xy[0] = DEFAULT_FONT_SIZE;
-    menu_font.font_size_xy[1] = DEFAULT_FONT_SIZE;
     menu_font.top_xy[0] = 0;
     menu_font.top_xy[1] = 16;
+#if ANDROID
+    menu_font.setFontParametersForScaling(DEFAULT_FONT_SIZE, DEFAULT_FONT_SIZE, 1);
+    menu_font.updateFontScaling(32, 23, 1);
+#else
+    menu_font.font_size_xy[0] = DEFAULT_FONT_SIZE;
+    menu_font.font_size_xy[1] = DEFAULT_FONT_SIZE;
     menu_font.num_xy[0] = 32;
     menu_font.num_xy[1] = 23;
+#endif
     menu_font.pitch_xy[0] = menu_font.font_size_xy[0];
     menu_font.pitch_xy[1] = 2 + menu_font.font_size_xy[1];
     menu_font.window_color[0] = menu_font.window_color[1] = menu_font.window_color[2] = 0xcc;
-    menu_font.is_line_space_fixed = true;
 
     deleteRMenuLink();
 
     /* ---------------------------------------- */
     /* Dialog related variables */
+#if ANDROID
+    dialog_font.setFontParametersForScaling(DEFAULT_DIALOG_FONT_SIZE, DEFAULT_DIALOG_FONT_SIZE, 1);
+#else
     dialog_font.font_size_xy[0] = DEFAULT_DIALOG_FONT_SIZE;
     dialog_font.font_size_xy[1] = DEFAULT_DIALOG_FONT_SIZE;
+#endif
     dialog_font.pitch_xy[0] = dialog_font.font_size_xy[0];
     dialog_font.pitch_xy[1] = 2 + dialog_font.font_size_xy[1];
     dialog_font.is_bold = false;
@@ -267,10 +281,10 @@ void ScriptParser::reset()
 
 int ScriptParser::openScript()
 {
-    script_h.cBR = new NsaReader( 0, archive_path, BaseReader::ARCHIVE_TYPE_NS2, key_table );
+    script_h.cBR = new NsaReader( 0, archive_path, BaseReader::ARCHIVE_TYPE_NS2, key_table, use_parent_resources );
     if (script_h.cBR->open( nsa_path )){
         delete script_h.cBR;
-        script_h.cBR = new DirectReader( archive_path, key_table );
+        script_h.cBR = new DirectReader( archive_path, key_table, use_parent_resources );
         script_h.cBR->open();
     }
     
@@ -325,7 +339,7 @@ int ScriptParser::getSystemCallNo( const char *buffer )
     else if ( !strcmp( buffer, "automode" ) )    return SYSTEM_AUTOMODE;
     else if ( !strcmp( buffer, "end" ) )         return SYSTEM_END;
     else{
-        printf("Unsupported system call %s\n", buffer );
+        loge(stderr, "Unsupported system call '%s'\n", buffer );
         return -1;
     }
 }
@@ -339,8 +353,12 @@ void ScriptParser::saveGlovalData()
     allocFileIOBuf();
     writeVariables( script_h.global_variable_border, script_h.variable_range, true );
 
-    if (saveFileIOBuf( "gloval.sav" ))
-        errorAndExit("can't open gloval.sav for writing.");
+    int ret = saveFileIOBuf( "gloval.sav" );
+    if (ret == -1){
+        errorAndExit( "can't open gloval.sav for writing\n");
+    } else if (ret == -2) {
+        errorAndExit( "unable to write gloval.sav correctly\n");
+    }
 }
 
 void ScriptParser::allocFileIOBuf()
@@ -384,7 +402,7 @@ int ScriptParser::saveFileIOBuf( const char *filename, int offset, const char *s
     return 0;
 }
 
-size_t ScriptParser::loadFileIOBuf( const char *filename )
+size_t ScriptParser::loadFileIOBuf( const char *filename, size_t* outSize )
 {
     bool use_save_dir = false;
     if (strcmp(filename, "envdata") != 0) use_save_dir = true;
@@ -401,6 +419,10 @@ size_t ScriptParser::loadFileIOBuf( const char *filename )
     fseek(fp, 0, SEEK_SET);
     size_t ret = fread(file_io_buf, 1, len, fp);
     fclose(fp);
+
+    if (outSize) {
+        *outSize = len;
+    }
 
     return ret;
 }
@@ -465,12 +487,14 @@ void ScriptParser::readStr(char **s)
         if (file_io_buf[file_io_buf_ptr+counter++] == 0) break;
     }
     
-    if (*s) delete[] *s;
-    *s = NULL;
-    
-    if (counter > 1){
-        *s = new char[counter];
-        memcpy(*s, file_io_buf + file_io_buf_ptr, counter);
+    if (s) {
+        if (*s) delete[] *s;
+        *s = NULL;
+
+        if (counter > 1){
+            *s = new char[counter];
+            memcpy(*s, file_io_buf + file_io_buf_ptr, counter);
+        }
     }
     file_io_buf_ptr += counter;
 }
@@ -564,8 +588,7 @@ void ScriptParser::writeLog( ScriptHandler::LogInfo &info )
     }
 
     if (saveFileIOBuf( info.filename )){
-        fprintf( stderr, "can't write %s\n", info.filename );
-        exit( -1 );
+        errorAndExit( "can't write %s\n", info.filename );
     }
 }
 
@@ -592,21 +615,34 @@ void ScriptParser::readLog( ScriptHandler::LogInfo &info )
     }
 }
 
-void ScriptParser::errorAndExit( const char *str, const char *reason )
+void ScriptParser::errorAndExit()
 {
 #ifdef ANDROID
-    __android_log_print( ANDROID_LOG_ERROR, "ONS",
-                         " *** Error at %s:%d [%s]; %s ***\n",
-                         current_label_info.name,
-                         current_line,
-                         str, reason?reason:"" );
-#else    
-    fprintf( stderr, " *** Error at %s:%d [%s]; %s ***\n",
-             current_label_info.name,
-             current_line,
-             str, reason?reason:"" );
-#endif    
+    throw ScriptException();
+#else
     exit(-1);
+#endif
+}
+
+void ScriptParser::errorAndExit( const char *fmt, ... )
+{
+    char message[1024];
+    char location[1024];
+    sprintf(location, "%s:%d -> Text line: '%s' (%d chars)", current_label_info.name, current_line,
+        script_h.getStringBuffer(), strlen(script_h.getStringBuffer()));
+
+    va_list ap;
+    char buf[1024];
+    va_start(ap, fmt);
+    vsnprintf(buf, 1024, fmt, ap);
+    sprintf(message, " *** Parse error: %s ***", buf);
+#ifdef ANDROID
+    throw ScriptException(message, location);
+#else
+    loge( stderr, "%s @ %s", message, location );
+    exit(-1);
+#endif
+    va_end(ap);
 }
 
 void ScriptParser::deleteNestInfo()
@@ -621,31 +657,20 @@ void ScriptParser::deleteNestInfo()
     last_nest_info = &root_nest_info;
 }
 
-void ScriptParser::setStr(char **dst, const char *src, int num, bool to_utf8)
+void ScriptParser::setStr( char **dst, const char *src, int num )
 {
-    if (*dst) delete[] *dst;
+    if ( *dst ) delete[] *dst;
     *dst = NULL;
     
-    if (src){
+    if ( src ){
         if (num >= 0){
-            *dst = new char[num + 1];
-            memcpy(*dst, src, num);
+            *dst = new char[ num + 1 ];
+            memcpy( *dst, src, num );
             (*dst)[num] = '\0';
         }
         else{
-            num = strlen(src);
-            if (to_utf8 && script_h.enc.getEncoding() == Encoding::CODE_UTF8){
-                char *tmp_buf = new char[num*2 + 1];
-                DirectReader::convertFromSJISToUTF8(tmp_buf, src);
-                num = strlen(tmp_buf);
-                *dst = new char[num + 1];
-                strcpy(*dst, tmp_buf);
-                delete[] tmp_buf;
-            }
-            else{
-                *dst = new char[num + 1];
-                strcpy(*dst, src);
-            }
+            *dst = new char[ strlen( src ) + 1];
+            strcpy( *dst, src );
         }
     }
 }
@@ -696,7 +721,7 @@ int ScriptParser::readEffect( EffectLink *effect )
             effect->anim.remove();
     }
     else if (effect->effect < 0 || effect->effect > 255){
-        fprintf(stderr, "Effect %d is out of range and is switched to 0.\n", effect->effect);
+        logw(stderr, "Effect %d is out of range and is switched to 0.\n", effect->effect);
         effect->effect = 0; // to suppress error
     }
 
@@ -719,8 +744,7 @@ ScriptParser::EffectLink *ScriptParser::parseEffect(bool init_flag)
         link = link->next;
     }
 
-    fprintf(stderr, "Effect No. %d is not found.\n", tmp_effect.effect);
-    exit(-1);
+    errorAndExit("Effect No. %d is not found.\n", tmp_effect.effect);
 
     return NULL;
 }
@@ -774,78 +798,121 @@ void ScriptParser::createKeyTable( const char *key_exe )
         key_table[ring_buffer[(ring_start+i)%256]] = i;
 }
 
-void ScriptParser::setKinsoku(const char *start_chrs, const char *end_chrs, bool add, int code)
+void ScriptParser::setKinsoku(const char *start_chrs, const char *end_chrs, bool add)
 {
+    int i;
+    const char *kchr;
+    Kinsoku *tmp;
+
     // count chrs
     int num_start = 0;
-    const char *kchr = start_chrs;
-    while (*kchr != '\0'){
-        kchr += script_h.enc.getBytes(*kchr, code);
+    kchr = start_chrs;
+    while (*kchr != '\0') {
+        if (!ScriptDecoder::isOneByte(*kchr)) kchr++;
+        kchr++;
         num_start++;
     }
 
     int num_end = 0;
     kchr = end_chrs;
-    while (*kchr != '\0'){
-        kchr += script_h.enc.getBytes(*kchr, code);
+    while (*kchr != '\0') {
+        if (!ScriptDecoder::isOneByte(*kchr)) kchr++;
+        kchr++;
         num_end++;
     }
 
-    Kinsoku *tmp = NULL;
-    if (add){
-        if (num_start_kinsoku > 0)
+    if (add) {
+        if (start_kinsoku != NULL)
             tmp = start_kinsoku;
-    }
-    else{
-        if (start_kinsoku)
+        else {
+            tmp = new Kinsoku[1];
+            num_start_kinsoku = 0;
+        }
+    } else {
+        if (start_kinsoku != NULL)
             delete[] start_kinsoku;
+        tmp = new Kinsoku[1];
         num_start_kinsoku = 0;
     }
     start_kinsoku = new Kinsoku[num_start_kinsoku + num_start];
-    if (num_start_kinsoku > 0)
-        memcpy(start_kinsoku, tmp, sizeof(Kinsoku)*num_start_kinsoku);
     kchr = start_chrs;
-    for (int i=0; i<num_start; i++){
-        start_kinsoku[num_start_kinsoku + i].unicode = script_h.enc.getUTF16(kchr, code);
-        kchr += script_h.enc.getBytes(*kchr, code);
+    for (i=0; i<num_start_kinsoku+num_start; i++) {
+        if (i < num_start_kinsoku)
+            start_kinsoku[i].chr[0] = tmp[i].chr[0];
+        else
+            start_kinsoku[i].chr[0] = *kchr++;
+        if (!ScriptDecoder::isOneByte(start_kinsoku[i].chr[0])) {
+            if (i < num_start_kinsoku)
+                start_kinsoku[i].chr[1] = tmp[i].chr[1];
+            else
+                start_kinsoku[i].chr[1] = *kchr++;
+        } else {
+            start_kinsoku[i].chr[1] = '\0';
+        }
     }
     num_start_kinsoku += num_start;
-    if (tmp) delete[] tmp;
+    delete[] tmp;
 
-    tmp = NULL;
     if (add) {
-        if (num_end_kinsoku > 0)
+        if (end_kinsoku != NULL)
             tmp = end_kinsoku;
-    }
-    else{
-        if (end_kinsoku)
+        else {
+            tmp = new Kinsoku[1];
+            num_end_kinsoku = 0;
+        }
+    } else {
+        if (end_kinsoku != NULL)
             delete[] end_kinsoku;
+        tmp = new Kinsoku[1];
         num_end_kinsoku = 0;
     }
     end_kinsoku = new Kinsoku[num_end_kinsoku + num_end];
-    if (num_end_kinsoku > 0)
-        memcpy(end_kinsoku, tmp, sizeof(Kinsoku)*num_end_kinsoku);
     kchr = end_chrs;
-    for (int i=0; i<num_end; i++) {
-        end_kinsoku[num_end_kinsoku + i].unicode = script_h.enc.getUTF16(kchr, code);
-        kchr += script_h.enc.getBytes(*kchr, code);
+    for (i=0; i<num_end_kinsoku+num_end; i++) {
+        if (i < num_end_kinsoku)
+            end_kinsoku[i].chr[0] = tmp[i].chr[0];
+        else
+            end_kinsoku[i].chr[0] = *kchr++;
+        if (!ScriptDecoder::isOneByte(end_kinsoku[i].chr[0])) {
+            if (i < num_end_kinsoku)
+                end_kinsoku[i].chr[1] = tmp[i].chr[1];
+            else
+                end_kinsoku[i].chr[1] = *kchr++;
+        } else {
+            end_kinsoku[i].chr[1] = '\0';
+        }
     }
     num_end_kinsoku += num_end;
-    if (tmp) delete[] tmp;
+    delete[] tmp;
 }
 
 bool ScriptParser::isStartKinsoku(const char *str)
 {
-    unsigned short unicode = script_h.enc.getUTF16(str);
-    for (int i=0; i<num_start_kinsoku; i++)
-        if (unicode == start_kinsoku[i].unicode) return true;
+    for (int i=0; i<num_start_kinsoku; i++) {
+        if ((start_kinsoku[i].chr[0] == *str) &&
+            (start_kinsoku[i].chr[1] == *(str+1)))
+            return true;
+    }
     return false;
 }
 
 bool ScriptParser::isEndKinsoku(const char *str)
 {
-    unsigned short unicode = script_h.enc.getUTF16(str);
-    for (int i=0; i<num_end_kinsoku; i++)
-        if (unicode == end_kinsoku[i].unicode) return true;
+    for (int i=0; i<num_end_kinsoku; i++) {
+        if ((end_kinsoku[i].chr[0] == *str) &&
+            (end_kinsoku[i].chr[1] == *(str+1)))
+            return true;
+    }
     return false;
+}
+
+void ScriptParser::setMenuLanguage(const char* languageStr)
+{
+    script_h.setSystemLanguage(languageStr);
+    MenuTextBase* menuText = script_h.getSystemLanguageText();
+
+    // Update constant strings
+    DEFAULT_SAVE_MENU_NAME = menuText->message_save_menu();
+    DEFAULT_LOAD_MENU_NAME = menuText->message_load_menu();
+    DEFAULT_SAVE_ITEM_NAME = menuText->message_save_item();
 }

@@ -2,7 +2,7 @@
  * 
  *  ONScripter.cpp - Execution block parser of ONScripter
  *
- *  Copyright (c) 2001-2020 Ogapee. All rights reserved.
+ *  Copyright (c) 2001-2016 Ogapee. All rights reserved.
  *
  *  ogapee@aqua.dti2.ne.jp
  *
@@ -22,10 +22,15 @@
  */
 
 #include "ONScripter.h"
+#include "utf8_decode.h"
 #ifdef USE_FONTCONFIG
 #include <fontconfig/fontconfig.h>
 #endif
 
+extern void initSJIS2UTF16();
+#ifdef ENABLE_CHINESE
+extern void initGBK2UTF16();
+#endif
 extern "C" void waveCallback( int channel );
 
 #define DEFAULT_AUDIOBUF  4096
@@ -36,28 +41,54 @@ extern "C" void waveCallback( int channel );
 #define DEFAULT_ENV_FONT "ÇlÇr ÉSÉVÉbÉN"
 #define DEFAULT_AUTOMODE_TIME 1000
 
+#ifdef ANDROID
+double      ONScripter::Sentence_font_scale = DEFAULT_SENTENCE_SCALE;
+bool        ONScripter::Use_java_io = false;
+JavaVM *    ONScripter::JNI_VM = NULL;
+jobject     ONScripter::JavaONScripter = NULL;
+jmethodID   ONScripter::JavaPlayVideo = NULL;
+jmethodID   ONScripter::JavaSendException = NULL;
+jmethodID   ONScripter::JavaSendReady = NULL;
+jmethodID   ONScripter::JavaReceiveMessage = NULL;
+jmethodID   ONScripter::JavaOnLoadFile = NULL;
+jmethodID   ONScripter::JavaOnFinish = NULL;
+jmethodID   ONScripter::JavaGetFD = NULL;
+jmethodID   ONScripter::JavaGetStat = NULL;
+jmethodID   ONScripter::JavaMkdir = NULL;
+jclass      ONScripter::JavaONScripterClass = NULL;
+
+const char* ONScripter::MESSAGE_SAVE_EXIST = NULL;
+const char* ONScripter::MESSAGE_SAVE_EMPTY = NULL;
+const char* ONScripter::MESSAGE_SAVE_CONFIRM = NULL;
+const char* ONScripter::MESSAGE_LOAD_CONFIRM = NULL;
+const char* ONScripter::MESSAGE_RESET_CONFIRM = NULL;
+const char* ONScripter::MESSAGE_END_CONFIRM = NULL;
+const char* ONScripter::MESSAGE_YES = NULL;
+const char* ONScripter::MESSAGE_NO = NULL;
+const char* ONScripter::MESSAGE_OK = NULL;
+const char* ONScripter::MESSAGE_CANCEL = NULL;
+#endif
+
 void ONScripter::initSDL()
 {
     /* ---------------------------------------- */
     /* Initialize SDL */
 
     if ( SDL_Init( SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_AUDIO ) < 0 ){
-        fprintf( stderr, "Couldn't initialize SDL: %s\n", SDL_GetError() );
-        exit(-1);
+        errorAndExit("Couldn't initialize SDL: %s\n", SDL_GetError());
     }
 
     atexit(SDL_Quit);
 
 #ifdef USE_CDROM
     if( cdaudio_flag && SDL_InitSubSystem( SDL_INIT_CDROM ) < 0 ){
-        fprintf( stderr, "Couldn't initialize CD-ROM: %s\n", SDL_GetError() );
-        exit(-1);
+        errorAndExit( "Couldn't initialize CD-ROM: %s\n", SDL_GetError() );
     }
 #endif
 
 #if !defined(IOS)
     if(SDL_InitSubSystem( SDL_INIT_JOYSTICK ) == 0 && SDL_JoystickOpen(0) != NULL)
-        printf( "Initialize JOYSTICK\n");
+        logv( "Initialize JOYSTICK\n");
 #endif
     
 #if defined(PSP) || defined(IPODLINUX) || defined(GP2X) || defined(WINCE)
@@ -67,8 +98,7 @@ void ONScripter::initSDL()
     /* ---------------------------------------- */
     /* Initialize SDL */
     if ( TTF_Init() < 0 ){
-        fprintf( stderr, "can't initialize SDL TTF\n");
-        exit(-1);
+        errorAndExit( "can't initialize SDL TTF\n");
     }
 
 #if defined(BPP16)
@@ -85,8 +115,7 @@ void ONScripter::initSDL()
     SDL_Rect **modes;
     modes = SDL_ListModes(NULL, SDL_FULLSCREEN);
     if (modes == (SDL_Rect **)0){
-        fprintf(stderr, "No Video mode available.\n");
-        exit(-1);
+        errorAndExit("No Video mode available.\n");
     }
     else if (modes == (SDL_Rect **)-1){
         // no restriction
@@ -166,19 +195,26 @@ void ONScripter::initSDL()
 #endif
     underline_value = script_h.screen_height;
 
+    // Set a focused window so it doesn't crash SDL_GetWindowSize runs
+    SDL_WarpMouse(0, 0);
+
 #ifndef USE_SDL_RENDERER
     if ( screen_surface == NULL ) {
-        fprintf( stderr, "Couldn't set %dx%dx%d video mode: %s\n",
+        errorAndExit( "Couldn't set %dx%dx%d video mode: %s\n",
                  screen_width, screen_height, screen_bpp, SDL_GetError() );
-        exit(-1);
     }
 #endif
-    printf("Display: %d x %d (%d bpp)\n", screen_width, screen_height, screen_bpp);
+    logv("Display: %d x %d (%d bpp)\n", screen_width, screen_height, screen_bpp);
     dirty_rect.setDimension(screen_width, screen_height);
-    
+
     screen_rect.x = screen_rect.y = 0;
     screen_rect.w = screen_width;
     screen_rect.h = screen_height;
+
+    initSJIS2UTF16();
+#ifdef ENABLE_CHINESE
+    initGBK2UTF16();
+#endif
 
     wm_title_string = new char[ strlen(DEFAULT_WM_TITLE) + 1 ];
     memcpy( wm_title_string, DEFAULT_WM_TITLE, strlen(DEFAULT_WM_TITLE) + 1 );
@@ -190,12 +226,18 @@ void ONScripter::initSDL()
 void ONScripter::openAudio(int freq)
 {
     Mix_CloseAudio();
-#if (defined(PDA_WIDTH) || defined(PDA_AUTOSIZE)) && !defined(PSP) && !defined(IPHONE) && !defined(IOS) && !defined(PANDORA)
-    if ( Mix_OpenAudio( (freq<0)?22050:freq, MIX_DEFAULT_FORMAT, MIX_DEFAULT_CHANNELS, DEFAULT_AUDIOBUF ) < 0 ){
-#else        
-    if ( Mix_OpenAudio( (freq<0)?44100:freq, MIX_DEFAULT_FORMAT, MIX_DEFAULT_CHANNELS, DEFAULT_AUDIOBUF ) < 0 ){
+
+    int audioFreq =
+#if defined(ANDROID)
+    // Default is 22050 because 44100 may crash in some games
+    audio_high_quality ? 44100 : 22050;
+#elif (defined(PDA_WIDTH) || defined(PDA_AUTOSIZE)) && !defined(PSP) && !defined(IPHONE) && !defined(IOS) && !defined(PANDORA)
+    22050;
+#else
+    44100;
 #endif
-        fprintf(stderr, "Couldn't open audio device!\n"
+    if ( Mix_OpenAudio( (freq<0)?audioFreq:freq, MIX_DEFAULT_FORMAT, MIX_DEFAULT_CHANNELS, DEFAULT_AUDIOBUF ) < 0 ){
+        logw(stderr, "Couldn't open audio device!\n"
                 "  reason: [%s].\n", SDL_GetError());
         audio_open_flag = false;
     }
@@ -205,7 +247,7 @@ void ONScripter::openAudio(int freq)
         int channels;
 
         Mix_QuerySpec( &freq, &format, &channels);
-        printf("Audio: %d Hz %d bit %s\n", freq,
+        logv("Audio: %d Hz %d bit %s\n", freq,
                (format&0xFF),
                (channels > 1) ? "stereo" : "mono");
         audio_format.format = format;
@@ -226,6 +268,7 @@ ONScripter::ONScripter()
     cdrom_drive_number = 0;
     cdaudio_flag = false;
     default_font = NULL;
+    screenshot_folder = NULL;
     registry_file = NULL;
     setStr( &registry_file, REGISTRY_FILE );
     dll_file = NULL;
@@ -241,8 +284,12 @@ ONScripter::ONScripter()
     sprite2_info = new AnimationInfo[MAX_SPRITE2_NUM];
     texture_info = new AnimationInfo[MAX_TEXTURE_NUM];
     smpeg_info = NULL;
-    layer_alpha_buf = NULL;
     current_button_state.down_flag = false;
+
+#ifdef ANDROID
+    audio_high_quality = false;
+    setMenuLanguage("en");
+#endif
 
     int i;
     for (i=0 ; i<MAX_SPRITE2_NUM ; i++)
@@ -264,6 +311,12 @@ ONScripter::~ONScripter()
 
     delete[] sprite_info;
     delete[] sprite2_info;
+
+#if defined(USE_SDL_RENDERER)
+    if (window) SDL_DestroyWindow(window);
+#endif
+    Mix_CloseAudio();
+    SDL_Quit();
 }
 
 void ONScripter::enableCDAudio(){
@@ -278,6 +331,11 @@ void ONScripter::setCDNumber(int cdrom_drive_number)
 void ONScripter::setFontFile(const char *filename)
 {
     setStr(&default_font, filename);
+}
+
+void ONScripter::setScreenshotFolder(const char *folderPath)
+{
+    setStr(&screenshot_folder, folderPath);
 }
 
 void ONScripter::setRegistryFile(const char *filename)
@@ -339,6 +397,11 @@ void ONScripter::renderFontOutline()
 #endif
 }
 
+void ONScripter::useParentResources()
+{
+    use_parent_resources = true;
+}
+
 void ONScripter::enableEdit()
 {
     edit_flag = true;
@@ -349,6 +412,31 @@ void ONScripter::setKeyEXE(const char *filename)
     setStr(&key_exe_file, filename);
 }
 
+#ifdef ANDROID
+void ONScripter::enableHQAudio()
+{
+    audio_high_quality = true;
+}
+
+void ONScripter::setMenuLanguage(const char* languageStr)
+{
+    ScriptParser::setMenuLanguage(languageStr);
+    MenuTextBase* menuText = script_h.getSystemLanguageText();
+
+    // Update constant strings
+    MESSAGE_SAVE_EXIST = menuText->message_save_exist();
+    MESSAGE_SAVE_EMPTY = menuText->message_save_empty();
+    MESSAGE_SAVE_CONFIRM = menuText->message_save_confirm();
+    MESSAGE_LOAD_CONFIRM = menuText->message_load_confirm();
+    MESSAGE_RESET_CONFIRM = menuText->message_reset_confirm();
+    MESSAGE_END_CONFIRM = menuText->message_end_confirm();
+    MESSAGE_YES = menuText->message_yes();
+    MESSAGE_NO = menuText->message_no();
+    MESSAGE_OK = menuText->message_ok();
+    MESSAGE_CANCEL = menuText->message_cancel();
+}
+#endif
+
 int ONScripter::openScript()
 {
     if (is_script_read) return 0;
@@ -358,7 +446,7 @@ int ONScripter::openScript()
         archive_path = new char[1];
         archive_path[0] = 0;
     }
-    
+
     if (key_exe_file){
         createKeyTable( key_exe_file );
         script_h.setKeyTable( key_table );
@@ -377,7 +465,6 @@ int ONScripter::init()
     backup_surface       = AnimationInfo::allocSurface( screen_width, screen_height, texture_format );
     effect_src_surface   = AnimationInfo::allocSurface( screen_width, screen_height, texture_format );
     effect_dst_surface   = AnimationInfo::allocSurface( screen_width, screen_height, texture_format );
-    layer_alpha_buf = new unsigned char[screen_width*screen_height];
 
 #if defined(USE_SDL_RENDERER)
     screenshot_surface = AnimationInfo::alloc32bitSurface( screen_device_width, screen_device_height, texture_format );
@@ -399,7 +486,6 @@ int ONScripter::init()
     text_info.num_of_cells = 1;
     text_info.allocImage( screen_width, screen_height, texture_format );
     text_info.fill(0, 0, 0, 0);
-    text_info.blending_mode = AnimationInfo::BLEND_ADD2;
 
     // ----------------------------------------
     // Initialize font
@@ -432,7 +518,7 @@ int ONScripter::init()
                 delete[] font_file;
                 font_file = new char[ strlen((const char*)val_s) + 1 ];
                 strcpy( font_file, (const char*)val_s );
-                printf("Font: %s\n", font_file);
+                logv("Font: %s\n", font_file);
             }
             FcPatternDestroy( p_pat );
         }
@@ -451,10 +537,10 @@ int ONScripter::init()
         if ( cdrom_drive_number >= 0 && cdrom_drive_number < SDL_CDNumDrives() )
             cdrom_info = SDL_CDOpen( cdrom_drive_number );
         if ( !cdrom_info ){
-            fprintf(stderr, "Couldn't open default CD-ROM: %s\n", SDL_GetError());
+            logw(stderr, "Couldn't open default CD-ROM: %s\n", SDL_GetError());
         }
         else if ( cdrom_info && !CD_INDRIVE( SDL_CDStatus( cdrom_info ) ) ) {
-            fprintf( stderr, "no CD-ROM in the drive\n" );
+            logw( stderr, "no CD-ROM in the drive\n" );
             SDL_CDClose( cdrom_info );
             cdrom_info = NULL;
         }
@@ -500,8 +586,8 @@ int ONScripter::init()
 
     readToken();
 
-    if ( sentence_font.openFont( font_file, screen_ratio1, screen_ratio2 ) == NULL ){
-        fprintf( stderr, "can't open font file: %s\n", font_file );
+    if ( !sentence_font.openFont( &font_cache, font_file, screen_ratio1, screen_ratio2) ){
+        loge( stderr, "can't open font file: %s\n", font_file );
         return -1;
     }
     
@@ -510,7 +596,7 @@ int ONScripter::init()
 
 void ONScripter::reset()
 {
-    automode_flag = false;
+    setInternalAutoMode(false);
     automode_time = DEFAULT_AUTOMODE_TIME;
     autoclick_time = 0;
     btntime2_flag = false;
@@ -529,6 +615,10 @@ void ONScripter::reset()
     all_sprite_hide_flag = false;
     all_sprite2_hide_flag = false;
 
+    if (breakup_cells) delete[] breakup_cells;
+    if (breakup_mask) delete[] breakup_mask;
+    if (breakup_cellforms) delete[] breakup_cellforms;
+
     if (resize_buffer_size != 16){
         delete[] resize_buffer;
         resize_buffer = new unsigned char[16];
@@ -543,6 +633,7 @@ void ONScripter::reset()
 
     new_line_skip_flag = false;
     text_on_flag = true;
+    draw_cursor_flag = false;
 
     setStr(&getret_str, NULL);
     getret_int = 0;
@@ -576,6 +667,8 @@ void ONScripter::resetSub()
 
     refresh_shadow_text_mode = REFRESH_NORMAL_MODE | REFRESH_SHADOW_MODE | REFRESH_TEXT_MODE;
     erase_text_window_mode = 1;
+    setInternalSkipMode(false);
+    setInternalSinglePageMode(false);
     skip_mode = SKIP_NONE;
     monocro_flag = false;
     monocro_color[0] = monocro_color[1] = monocro_color[2] = 0;
@@ -617,7 +710,6 @@ void ONScripter::resetSub()
     for (i=0 ; i<MAX_SPRITE2_NUM ; i++) sprite2_info[i].reset();
     for (i=0 ; i<MAX_TEXTURE_NUM ; i++) texture_info[i].reset();
     smpeg_info = NULL;
-    effect_src_info.reset();
     barclearCommand();
     prnumclearCommand();
     for (i=0 ; i<2 ; i++) cursor_info[i].reset();
@@ -630,9 +722,13 @@ void ONScripter::resetSub()
 
 void ONScripter::resetSentenceFont()
 {
-    sentence_font.reset(&script_h.enc);
+    sentence_font.reset();
+#if ANDROID
+    setSentenceFontParamters(DEFAULT_FONT_SIZE, DEFAULT_FONT_SIZE);
+#else
     sentence_font.font_size_xy[0] = DEFAULT_FONT_SIZE;
     sentence_font.font_size_xy[1] = DEFAULT_FONT_SIZE;
+#endif
     sentence_font.top_xy[0] = 21;
     sentence_font.top_xy[1] = 16;// + sentence_font.font_size;
     sentence_font.num_xy[0] = 23;
@@ -686,7 +782,9 @@ void ONScripter::flushDirect( SDL_Rect &rect, int refresh_mode )
     SDL_Rect dst_rect = rect;
     if (AnimationInfo::doClipping(&dst_rect, &screen_rect) || (dst_rect.w==0 && dst_rect.h==0)) return;
     SDL_BlitSurface( accumulation_surface, &dst_rect, screen_surface, &dst_rect );
-    SDL_UpdateRect( screen_surface, dst_rect.x, dst_rect.y, dst_rect.w, dst_rect.h );
+    if (dst_rect.w > 0 && dst_rect.h > 0) {
+        SDL_UpdateRect( screen_surface, dst_rect.x, dst_rect.y, dst_rect.w, dst_rect.h );
+    }
 #endif
 }
 
@@ -825,7 +923,7 @@ void ONScripter::executeLabel()
 
     while ( current_line<current_label_info.num_of_lines ){
         if ( debug_level > 0 )
-            printf("*****  executeLabel %s:%d/%d:%d:%d *****\n",
+            logv("*****  executeLabel %s:%d/%d:%d:%d *****\n",
                    current_label_info.name,
                    current_line,
                    current_label_info.num_of_lines,
@@ -849,7 +947,7 @@ void ONScripter::executeLabel()
             continue;
         }
 
-        if ( kidokuskip_flag && skip_mode & SKIP_NORMAL && kidokumode_flag && !script_h.isKidoku() ) skip_mode &= ~SKIP_NORMAL;
+        if ( kidokuskip_flag && skip_mode & SKIP_NORMAL && kidokumode_flag && !script_h.isKidoku() ) setInternalSkipMode(false);
 
         int ret = parseLine();
         if ( ret & (RET_SKIP_LINE | RET_EOL) ){
@@ -869,7 +967,7 @@ void ONScripter::executeLabel()
         goto executeLabelTop;
     }
     
-    fprintf( stderr, " ***** End *****\n");
+    logw( stderr, " ***** End *****\n");
     endCommand();
 }
 
@@ -881,14 +979,10 @@ void ONScripter::runScript()
 
 int ONScripter::parseLine( )
 {
-    if (debug_level > 0) printf("ONScripter::Parseline %s\n", script_h.getStringBuffer() );
+    if (debug_level > 0) logv("ONScripter::Parseline %s\n", script_h.getStringBuffer() );
 
     const char *cmd = script_h.getStringBuffer();
     if      (cmd[0] == ';') return RET_CONTINUE;
-    else if (strncmp(cmd, "langjp", 6) == 0 &&
-             script_h.current_language == 0) return RET_CONTINUE;
-    else if (strncmp(cmd, "langen", 6) == 0 &&
-             script_h.current_language == 1) return RET_CONTINUE;
     else if (cmd[0] == '*') return RET_CONTINUE;
     else if (cmd[0] == ':') return RET_CONTINUE;
 
@@ -939,7 +1033,7 @@ int ONScripter::parseLine( )
     else if ( cmd[0] == 'd' && cmd[1] == 'v' && cmd[2] >= '0' && cmd[2] <= '9' )
         return dvCommand();
 
-    fprintf( stderr, " command [%s] is not supported yet!!\n", cmd );
+    logw( stderr, " command [%s] is not supported yet!!\n", cmd );
 
     script_h.skipToken();
 
@@ -1027,6 +1121,10 @@ void ONScripter::clearCurrentPage()
 
     text_info.fill( 0, 0, 0, 0 );
     cached_page = current_page;
+
+#ifdef ANDROID
+    reassureSentenceFontSize();
+#endif
 }
 
 void ONScripter::shadowTextDisplay( SDL_Surface *surface, SDL_Rect &clip )
@@ -1081,7 +1179,7 @@ void ONScripter::newPage()
     flush( refreshMode(), &sentence_font_info.pos );
 }
 
-ButtonLink *ONScripter::getSelectableSentence( char *buffer, FontInfo *info, bool flush_flag, bool nofile_flag )
+ButtonLink *ONScripter::getSelectableSentence( char *buffer, FontInfo *info, bool flush_flag, bool nofile_flag, bool single_line )
 {
     int current_text_xy[2];
     current_text_xy[0] = info->xy[0];
@@ -1110,7 +1208,7 @@ ButtonLink *ONScripter::getSelectableSentence( char *buffer, FontInfo *info, boo
     ai->scalePosXY( screen_ratio1, screen_ratio2 );
     ai->visible = true;
 
-    setupAnimationInfo( ai, info );
+    setupAnimationInfo( ai, info, single_line );
     bl->select_rect = bl->image_rect = ai->pos;
 
     info->newLine();
@@ -1197,7 +1295,7 @@ void ONScripter::loadEnvData()
 {
     volume_on_flag = true;
     text_speed_no = 1;
-    skip_mode &= ~SKIP_TO_EOP;
+    setInternalSinglePageMode(false);
     default_env_font = NULL;
     cdaudio_on_flag = true;
     default_cdrom_drive = NULL;
@@ -1209,7 +1307,7 @@ void ONScripter::loadEnvData()
         if (readInt() == 1 && window_mode == false) menu_fullCommand();
         if (readInt() == 0) volume_on_flag = false;
         text_speed_no = readInt();
-        if (readInt() == 1) skip_mode |= SKIP_TO_EOP;
+        if (readInt() == 1) setInternalSinglePageMode(true);
         readStr( &default_env_font );
         if (default_env_font == NULL)
             setStr(&default_env_font, DEFAULT_ENV_FONT);
@@ -1226,6 +1324,15 @@ void ONScripter::loadEnvData()
             save_dir = new char[ strlen(archive_path) + strlen(save_dir_envdata) + 2 ];
             sprintf( save_dir, "%s%s%c", archive_path, save_dir_envdata, DELIMITER );
             script_h.setSaveDir(save_dir);
+
+            // Check if save_dir exists, if not create the folder
+            struct stat buf;
+            if ( stat_ons( save_dir, &buf ) != 0 ){
+                // Does not exist try making it
+                if (mkdir(save_dir, 00755) != 0) {
+                    loge(stderr, "Unable to create save directory from envdata");
+                }
+            }
         }
         automode_time = readInt();
     }
@@ -1320,3 +1427,98 @@ int ONScripter::getNumberFromBuffer( const char **buf )
 
     return ret;
 }
+
+void ONScripter::setInternalSkipMode(bool enabled) {
+    if (enabled == ((skip_mode & SKIP_NORMAL) != 0)) return;
+    if (enabled) {
+        skip_mode |= SKIP_NORMAL;
+    } else {
+        skip_mode &= ~SKIP_NORMAL;
+    }
+#ifdef ANDROID
+    JNIWrapper wrapper(JNI_VM);
+    jboolean jb = enabled ? JNI_TRUE : JNI_FALSE;
+    wrapper.env->CallStaticVoidMethod(JavaONScripterClass, JavaReceiveMessage, ANDROID_MSG_SKIP_MODE, jb);
+#endif
+}
+
+void ONScripter::setInternalAutoMode(bool enabled) {
+    if (automode_flag == enabled) return;
+    automode_flag = enabled;
+#ifdef ANDROID
+    JNIWrapper wrapper(JNI_VM);
+    jboolean jb = enabled ? JNI_TRUE : JNI_FALSE;
+    wrapper.env->CallStaticVoidMethod(JavaONScripterClass, JavaReceiveMessage, ANDROID_MSG_AUTO_MODE, jb);
+#endif
+}
+
+void ONScripter::setInternalSinglePageMode(bool enabled) {
+    if (enabled == ((skip_mode & SKIP_TO_EOP) != 0)) return;
+    if (enabled) {
+        skip_mode |= SKIP_TO_EOP;
+    } else {
+        skip_mode &= ~SKIP_TO_EOP;
+    }
+#ifdef ANDROID
+    JNIWrapper wrapper(JNI_VM);
+    jboolean jb = enabled ? JNI_TRUE : JNI_FALSE;
+    wrapper.env->CallStaticVoidMethod(JavaONScripterClass, JavaReceiveMessage, ANDROID_MSG_SINGLE_PAGE_MODE, jb);
+#endif
+}
+
+#ifdef ANDROID
+void ONScripter::sendException(ScriptException& exception) {
+    const char* message = exception.what();
+    if (message) {
+        JNIWrapper wrapper(JNI_VM);
+
+        // Parse each string from char array to Unicode to send to Java
+        jstring jmessage, jline, jbacktrace;
+        const int bufSize = 2048;
+        jchar* buffer = new jchar[bufSize];
+
+        // Message
+        jsize length = basicStringToUnicode(buffer, message);
+        jmessage = wrapper.env->NewString(buffer, length);
+
+        // Backtrace
+        length = basicStringToUnicode(buffer, exception.stacktrace());
+        jbacktrace = wrapper.env->NewString(buffer, (jsize)length);
+
+        // Extra & send to Java
+        if (exception.scriptLine()) {
+            length = basicStringToUnicode(buffer, exception.scriptLine());
+            jline = wrapper.env->NewString(buffer, length);
+            wrapper.env->CallVoidMethod( JavaONScripter, JavaSendException, jmessage, jline, jbacktrace );
+        } else {
+            wrapper.env->CallVoidMethod( JavaONScripter, JavaSendException, jmessage, NULL, jbacktrace );
+        }
+        delete[] buffer;
+    }
+}
+
+void ONScripter::sendReady() {
+    JNIWrapper wrapper(JNI_VM);
+    wrapper.env->CallVoidMethod( JavaONScripter, JavaSendReady);
+}
+
+void ONScripter::sendUserMessage(MessageType_t type) {
+    if (type < ANDROID_MSG_CORRUPT_SAVE_FILE) {
+        errorAndExit("Invalid user message");
+        return;
+    }
+
+    JNIWrapper wrapper(JNI_VM);
+    wrapper.env->CallStaticVoidMethod(JavaONScripterClass, JavaReceiveMessage, type, JNI_FALSE);
+}
+
+void ONScripter::sendLoadFileEvent(char* filename) {
+    JNIWrapper wrapper(JNI_VM);
+
+    jstring jsavepath = NULL;
+    if (save_dir) {
+        jsavepath = wrapper.env->NewStringUTF(save_dir);
+    }
+    wrapper.env->CallVoidMethod(JavaONScripter, JavaOnLoadFile, wrapper.env->NewStringUTF(filename), jsavepath);
+}
+#endif

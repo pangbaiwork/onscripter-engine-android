@@ -2,7 +2,7 @@
  * 
  *  ONScripter_command.cpp - Command executer of ONScripter
  *
- *  Copyright (c) 2001-2019 Ogapee. All rights reserved.
+ *  Copyright (c) 2001-2016 Ogapee. All rights reserved.
  *
  *  ogapee@aqua.dti2.ne.jp
  *
@@ -22,12 +22,6 @@
  */
 
 #include "ONScripter.h"
-#if defined(LINUX) || defined(MACOSX) || defined(IOS)
-#include <sys/types.h>
-#include <sys/stat.h>
-#elif defined(WIN32)
-#include <direct.h>
-#endif
 #include "version.h"
 
 #if defined(MACOSX) && (SDL_COMPILEDVERSION >= 1208)
@@ -37,7 +31,6 @@
 extern SDL_TimerID timer_bgmfade_id;
 extern "C" Uint32 SDLCALL bgmfadeCallback( Uint32 interval, void *param );
 extern "C" void smpegCallback();
-extern unsigned short convUTF162SJIS(unsigned short in);
     
 #define CONTINUOUS_PLAY
 
@@ -206,7 +199,7 @@ int ONScripter::trapCommand()
         setStr(&trap_dist, buf+1);
     }
     else{
-        printf("trapCommand: [%s] is not supported\n", buf );
+        logw(stderr, "trapCommand: [%s] is not supported\n", buf );
     }
               
     return RET_CONTINUE;
@@ -257,6 +250,7 @@ int ONScripter::textoffCommand()
 {
     if (windowchip_sprite_no >= 0)
         sprite_info[windowchip_sprite_no].visible = false;
+    refreshSurface(backup_surface, NULL, REFRESH_NORMAL_MODE);
 
     leaveTextDisplayMode(true);
 
@@ -296,7 +290,7 @@ int ONScripter::texecCommand()
         page_enter_status = 0;
     }
 
-    saveon_flag = true;
+    saveonCommand();
     
     return RET_CONTINUE;
 }
@@ -327,7 +321,7 @@ int ONScripter::talCommand()
     }
 
     EffectLink *el = parseEffect(true);
-    if (setEffect(el)) return RET_CONTINUE;
+    if (setEffect(el, true, true)) return RET_CONTINUE;
     while (doEffect(el));
 
     return RET_CONTINUE;
@@ -379,14 +373,23 @@ int ONScripter::strspCommand()
     ai->scalePosXY( screen_ratio1, screen_ratio2 );
 
     FontInfo fi;
-    fi.enc = &script_h.enc;
     fi.is_newline_accepted = true;
     fi.num_xy[0] = script_h.readInt();
     fi.num_xy[1] = script_h.readInt();
+#if ANDROID
+    int sizeX = script_h.readInt();
+    int sizeY = script_h.readInt();
+    int spaceX = script_h.readInt();
+    int spaceY = script_h.readInt();
+    fi.setFontParametersForScaling(sizeX, sizeY, spaceX, spaceY, Sentence_font_scale);
+    fi.pitch_xy[0] = spaceX + fi.font_size_xy[0];
+    fi.pitch_xy[1] = spaceY + fi.font_size_xy[1];
+#else
     fi.font_size_xy[0] = script_h.readInt();
     fi.font_size_xy[1] = script_h.readInt();
     fi.pitch_xy[0] = script_h.readInt() + fi.font_size_xy[0];
     fi.pitch_xy[1] = script_h.readInt() + fi.font_size_xy[1];
+#endif
     fi.is_bold = script_h.readInt()?true:false;
     fi.is_shadow = script_h.readInt()?true:false;
 
@@ -549,13 +552,15 @@ int ONScripter::splitCommand()
     const char *save_buf = script_h.saveStringBuffer();
     
     char delimiter = script_h.readStr()[0];
-
     char token256[256], *token=NULL;
     while( script_h.getEndStatus() & ScriptHandler::END_COMMA ){
 
         unsigned int c=0;
-        while(save_buf[c] != delimiter && save_buf[c] != '\0')
-            c += script_h.enc.getBytes(save_buf[c]);
+        while(save_buf[c] != delimiter && save_buf[c] != '\0'){
+            unsigned short index = save_buf[c + 1] != '\0' && save_buf[c + 1] != '\\' ?
+                (save_buf[c] & 0xFF) << 8 ^ save_buf[c + 1] & 0xFF : 0;
+            c += script_h.decoder->getNumBytes(save_buf[c]);
+        }
         
         if (c < 256) 
             token = token256;
@@ -628,30 +633,10 @@ int ONScripter::spbtnCommand()
 
 int ONScripter::skipoffCommand() 
 { 
-    skip_mode &= ~SKIP_NORMAL;
+    setInternalSkipMode(false);
  
     return RET_CONTINUE; 
 } 
-
-int ONScripter::showlangjpCommand()
-{
-    script_h.current_language = 1;
-    
-    text_info.fill( 0, 0, 0, 0 );
-    flush(refreshMode(), &sentence_font_info.pos);
-
-    return RET_CONTINUE;
-}
-
-int ONScripter::showlangenCommand()
-{
-    script_h.current_language = 0;
-    
-    text_info.fill( 0, 0, 0, 0 );
-    flush(refreshMode(), &sentence_font_info.pos);
-
-    return RET_CONTINUE;
-}
 
 int ONScripter::sevolCommand()
 {
@@ -674,10 +659,20 @@ void ONScripter::setwindowCore()
     sentence_font.top_xy[1] = script_h.readInt();
     sentence_font.num_xy[0] = script_h.readInt();
     sentence_font.num_xy[1] = script_h.readInt();
+#if ANDROID
+    int sizeX = script_h.readInt();
+    int sizeY = script_h.readInt();
+    int spaceX = script_h.readInt();
+    int spaceY = script_h.readInt();
+    setSentenceFontParamters(sizeX, sizeY, spaceX, spaceY);
+    sentence_font.pitch_xy[0] = spaceX + sentence_font.font_size_xy[0];
+    sentence_font.pitch_xy[1] = spaceY + sentence_font.font_size_xy[1];
+#else
     sentence_font.font_size_xy[0] = script_h.readInt();
     sentence_font.font_size_xy[1] = script_h.readInt();
     sentence_font.pitch_xy[0] = script_h.readInt() + sentence_font.font_size_xy[0];
     sentence_font.pitch_xy[1] = script_h.readInt() + sentence_font.font_size_xy[1];
+#endif
     sentence_font.wait_time = script_h.readInt();
     sentence_font.is_bold = script_h.readInt()?true:false;
     sentence_font.is_shadow = script_h.readInt()?true:false;
@@ -699,17 +694,11 @@ void ONScripter::setwindowCore()
         ai->scalePosWH( screen_ratio1, screen_ratio2 );
     }
     else{
-        if (buf[0] != 0){
-            ai->setImageName(buf);
-            parseTaggedString(ai);
-            setupAnimationInfo(ai);
-        }
+        ai->setImageName( buf );
+        parseTaggedString( ai );
+        setupAnimationInfo( ai );
         ai->orig_pos.x = script_h.readInt();
         ai->orig_pos.y = script_h.readInt();
-        if (script_h.getEndStatus() & ScriptHandler::END_COMMA)
-            script_h.readInt();
-        if (script_h.getEndStatus() & ScriptHandler::END_COMMA)
-            script_h.readInt();
         ai->scalePosXY( screen_ratio1, screen_ratio2 );
 
         sentence_font.is_transparent = false;
@@ -812,8 +801,7 @@ int ONScripter::selectCommand()
 
     bool comma_flag = true;
     if ( select_mode == SELECT_CSEL_MODE ){
-        if (saveon_flag && internal_saveon_flag) storeSaveFile();
-        saveon_flag = false;
+        saveoffCommand();
     }
     shortcut_mouse_line = -1;
 
@@ -907,7 +895,7 @@ int ONScripter::selectCommand()
         setCurrentLabel( "customsel" );
         return RET_CONTINUE;
     }
-    automode_flag = false;
+    setInternalAutoMode(false);
     sentence_font.xy[0] = xy[0];
     sentence_font.xy[1] = xy[1];
 
@@ -917,7 +905,7 @@ int ONScripter::selectCommand()
 
     event_mode = WAIT_TEXT_MODE | WAIT_BUTTON_MODE | WAIT_TIMER_MODE;
     do{
-        skip_mode &= ~SKIP_NORMAL;
+        setInternalSkipMode(false);
         if (waitEvent(-1)) return RET_CONTINUE;
     }
     while(current_button_state.button <= 0 || skip_mode & SKIP_NORMAL);
@@ -991,23 +979,19 @@ int ONScripter::savescreenshotCommand()
     resizeSurface( screenshot_surface, surface );
 
     const char *buf = script_h.readStr();
-    if (script_h.enc.getEncoding() == Encoding::CODE_UTF8){
-        char *dir = new char[strlen(archive_path) + strlen(buf) + 1];
-        sprintf(dir, "%s%s", archive_path, buf);
-        for (int i=strlen(dir)-1; i>=0; i--){
-            if (dir[i] == '/' || dir[i] == '\\'){
-                dir[i] = 0;
-#if defined(LINUX) || defined(MACOSX) || defined(IOS)
-                mkdir(dir, 0755);
-#elif defined(WIN32)
-                _mkdir(dir);
-#endif
-                break;
-            }
+
+    // Get the folder path to save the image into and create it if it does not exist
+    char* pos = (char*) std::max(strrchr(buf, '\\'), strrchr(buf, '/'));
+    if (pos) {
+        // TODO should recursively create folders?
+        char c = *pos;
+        *pos = '\0';
+        if (mkdir(buf, 00755) != 0) {
+            loge(stderr, "Unable to create directory for screenshot, path='%s'", buf);
         }
-        delete[] dir;
+        *pos = c;
     }
-    
+
     FILE *fp = fopen(buf, "wb");
     if (fp){
         SDL_RWops *rwops = SDL_RWFromFP(fp, SDL_TRUE);
@@ -1166,7 +1150,7 @@ int ONScripter::quakeCommand()
     dirty_rect.fill( screen_width, screen_height );
     SDL_BlitSurface( accumulation_surface, NULL, effect_dst_surface, NULL );
 
-    if (setEffect(&tmp_effect)) return RET_CONTINUE;
+    if (setEffect(&tmp_effect, true, true)) return RET_CONTINUE;
     while (doEffect(&tmp_effect));
 
     return RET_CONTINUE;
@@ -1253,7 +1237,7 @@ int ONScripter::printCommand()
     leaveTextDisplayMode();
 
     EffectLink *el = parseEffect(true);
-    if (setEffect(el)) return RET_CONTINUE;
+    if (setEffect(el, true, true)) return RET_CONTINUE;
     while (doEffect(el));
 
     return RET_CONTINUE;
@@ -1292,7 +1276,7 @@ int ONScripter::playCommand()
         setStr(&midi_file_name, buf);
         midi_play_loop_flag = loop_flag;
         if (playSound(midi_file_name, SOUND_MIDI, midi_play_loop_flag) != SOUND_MIDI){
-            fprintf(stderr, "can't play MIDI file %s\n", midi_file_name);
+            logw(stderr, "can't play MIDI file %s\n", midi_file_name);
         }
     }
 
@@ -1398,7 +1382,7 @@ int ONScripter::mpegplayCommand()
     bool click_flag = (script_h.readInt()==1)?true:false;
 
     stopBGM( false );
-    if (playMPEG( save_buf, click_flag )) endCommand();
+    if (playMPEG( save_buf, click_flag )) errorAndExit();
 
     repaintCommand();
     
@@ -1439,7 +1423,6 @@ int ONScripter::mp3stopCommand()
         else{
             // wait until fadout is finished when playing music other than ogg
             event_mode = WAIT_TIMER_MODE;
-            waitEvent(-1);
         }
     }
 
@@ -1549,16 +1532,17 @@ int ONScripter::movieCommand()
 {
     if (script_h.compareString("stop")){
         script_h.readLabel();
-        fprintf(stderr, " [movie stop] is not supported yet!!\n");
+        logw(stderr, " [movie stop] is not supported yet!!\n");
         return RET_CONTINUE;
     }
 
     script_h.readStr();
     const char *filename = script_h.saveStringBuffer();
+    
+    stopBGM(false);
 
     bool click_flag = false;
     bool loop_flag = false;
-    bool nosound_flag = false;
 
     while (script_h.getEndStatus() & ScriptHandler::END_COMMA){
         if (script_h.compareString("pos")){ // not supported yet
@@ -1567,7 +1551,7 @@ int ONScripter::movieCommand()
             script_h.readInt();
             script_h.readInt();
             script_h.readInt();
-            fprintf(stderr, " [movie pos] is not supported yet!!\n");
+            logw(stderr, " [movie pos] is not supported yet!!\n");
         }
         else if (script_h.compareString("click")){
             script_h.readLabel();
@@ -1579,20 +1563,14 @@ int ONScripter::movieCommand()
         }
         else if (script_h.compareString("async")){ // not supported yet
             script_h.readLabel();
-            fprintf(stderr, " [movie async] is not supported yet!!\n");
-        }
-        else if (script_h.compareString("nosound")){
-            script_h.readLabel();
-            nosound_flag = true;
+            logw(stderr, " [movie async] is not supported yet!!\n");
         }
         else{
             script_h.readLabel();
         }
     }
     
-    if (!nosound_flag) stopBGM(false);
-
-    if (playMPEG(filename, click_flag, loop_flag, nosound_flag)) endCommand();
+    if (playMPEG(filename, click_flag, loop_flag)) errorAndExit();
 
     return RET_CONTINUE;
 }
@@ -1669,21 +1647,21 @@ int ONScripter::menu_fullCommand()
 
 int ONScripter::menu_click_pageCommand()
 {
-    skip_mode |= SKIP_TO_EOP;
+    setInternalSinglePageMode(true);
     return RET_CONTINUE;
 }
 
 int ONScripter::menu_click_defCommand()
 {
-    skip_mode &= ~SKIP_TO_EOP;
+    setInternalSinglePageMode(false);
     return RET_CONTINUE;
 }
 
 int ONScripter::menu_automodeCommand()
 {
-    automode_flag = true;
-    skip_mode &= ~SKIP_NORMAL;
-    printf("menu_automode: change to automode\n");
+    setInternalAutoMode(true);
+    setInternalSkipMode(false);
+    logv("menu_automode: change to automode\n");
     
     return RET_CONTINUE;
 }
@@ -1782,15 +1760,6 @@ int ONScripter::lspCommand()
         ai->scalePosXY( screen_ratio1, screen_ratio2 );
 
         ai->default_alpha = 0;
-
-        sprintf(filename, ":a;>%d,%d,#000000", w, h);
-        effect_src_info.setImageName( filename );
-        effect_src_info.orig_pos.x = 0;
-        effect_src_info.orig_pos.y = 0;
-        effect_src_info.scalePosXY( screen_ratio1, screen_ratio2 );
-        effect_src_info.blending_mode = AnimationInfo::BLEND_ADD2;
-        parseTaggedString( &effect_src_info );
-        setupAnimationInfo( &effect_src_info );
     }
     else{
         ai->setImageName( buf );
@@ -1805,7 +1774,7 @@ int ONScripter::lspCommand()
     }
     
     parseTaggedString( ai );
-    setupAnimationInfo( ai );
+    setupAnimationInfo( ai, NULL, false, script_h.decoder );
 
     if ( ai->visible ) dirty_rect.add( ai->pos );
 
@@ -1953,12 +1922,13 @@ int ONScripter::loadgameCommand()
     mp3fadeout_duration = 0; //don't use fadeout during a load
     if ( !loadSaveFile( no ) ){
         dirty_rect.fill( screen_width, screen_height );
+        refreshSurface(backup_surface, &dirty_rect.bounding_box, REFRESH_NORMAL_MODE);
         flush( refreshMode() );
 
         saveon_flag = true;
         internal_saveon_flag = true;
-        skip_mode &= ~SKIP_NORMAL;
-        automode_flag = false;
+        setInternalSkipMode(false);
+        setInternalAutoMode(false);
         deleteButtonLink();
         deleteSelectLink();
         text_on_flag = false;
@@ -2017,7 +1987,7 @@ int ONScripter::ldCommand()
     }
 
     EffectLink *el = parseEffect(true);
-    if (setEffect(el)) return RET_CONTINUE;
+    if (setEffect(el, true, true)) return RET_CONTINUE;
     while (doEffect(el));
 
     return RET_CONTINUE;
@@ -2035,7 +2005,6 @@ static void smpeg_filter_callback( SDL_Overlay * dst, SDL_Overlay * src, SDL_Rec
     if (!ai) return;
 
     ai->convertFromYUV(src);
-    ons->updateEffect();
 }
 
 static void smpeg_filter_destroy( struct SMPEG_Filter * filter )
@@ -2104,20 +2073,6 @@ int ONScripter::layermessageCommand()
     }
 #endif        
 
-    return RET_CONTINUE;
-}
-
-int ONScripter::langjpCommand()
-{
-    current_read_language = 1;
-    
-    return RET_CONTINUE;
-}
-
-int ONScripter::langenCommand()
-{
-    current_read_language = 0;
-    
     return RET_CONTINUE;
 }
 
@@ -2215,7 +2170,7 @@ int ONScripter::inputCommand()
     const char *buf = script_h.readStr(); // default value
     setStr( &script_h.getVariableData(no).str, buf );
 
-    printf( "*** inputCommand(): $%d is set to the default value: %s\n",
+    logv( "*** inputCommand(): $%d is set to the default value: %s\n",
             no, buf );
     script_h.readInt(); // maxlen
     script_h.readInt(); // widechar flag
@@ -2254,7 +2209,7 @@ int ONScripter::humanorderCommand()
             dirty_rect.add( tachi_info[i].pos );
 
     EffectLink *el = parseEffect(true);
-    if (setEffect(el)) return RET_CONTINUE;
+    if (setEffect(el, true, true)) return RET_CONTINUE;
     while (doEffect(el));
 
     return RET_CONTINUE;
@@ -2351,13 +2306,10 @@ int ONScripter::gettagCommand()
 
     char *buf = pretext_buf;
 
-    int n = script_h.enc.getBytes(buf[0]);
-    unsigned short unicode1 = script_h.enc.getUTF16(buf);
-    unsigned short unicode2 = script_h.enc.getUTF16("¡Ú", Encoding::CODE_CP932);
     if (buf[0] == '[')
         buf++;
-    else if (zenkakko_flag && unicode1 == unicode2)
-        buf += n;
+    else if (zenkakko_flag && buf[0] == "¡Ú"[0] && buf[1] == "¡Ú"[1])
+        buf += 2;
     else
         buf = NULL;
     
@@ -2377,11 +2329,9 @@ int ONScripter::gettagCommand()
         else if ( script_h.pushed_variable.type & ScriptHandler::VAR_STR ){
             if (buf){
                 const char *buf_start = buf;
-                unicode1 = script_h.enc.getUTF16(buf);
-                unicode2 = script_h.enc.getUTF16("¡Û", Encoding::CODE_CP932);
                 while(*buf != '/' && *buf != 0 && *buf != ']' && 
-                      (!zenkakko_flag || unicode1 != unicode2)){
-                    buf += script_h.enc.getBytes(buf[0]);
+                      (!zenkakko_flag || buf[0] != "¡Û"[0] || buf[1] != "¡Û"[1])){
+                    buf += script_h.decoder->getNumBytes(*buf);
                 }
                 setStr( &script_h.getVariableData(script_h.pushed_variable.var_no).str, buf_start, buf-buf_start );
             }
@@ -2398,13 +2348,11 @@ int ONScripter::gettagCommand()
     }
     while(end_status & ScriptHandler::END_COMMA);
 
-    n = script_h.enc.getBytes(pretext_buf[0]);
-    unicode1 = script_h.enc.getUTF16(pretext_buf);
-    unicode2 = script_h.enc.getUTF16("¡Û", Encoding::CODE_CP932);
     if (pretext_buf[0] == ']')
         pretext_buf++;
-    else if (zenkakko_flag && unicode1 == unicode2)
-        pretext_buf += n;
+    else if (zenkakko_flag && 
+             pretext_buf[0] == "¡Û"[0] && pretext_buf[1] == "¡Û"[1])
+        pretext_buf += 2;
 
     return RET_CONTINUE;
 }
@@ -2505,14 +2453,6 @@ int ONScripter::getsavestrCommand()
     return RET_CONTINUE;
 }
 
-int ONScripter::getreadlangCommand()
-{
-    script_h.readInt();
-    script_h.setInt(&script_h.current_variable, current_read_language);
-    
-    return RET_CONTINUE;
-}
-
 int ONScripter::getpageupCommand()
 {
     getpageup_flag = true;
@@ -2602,7 +2542,7 @@ int ONScripter::getregCommand()
         }
     }
 
-    if ( !found_flag ) fprintf( stderr, "  The key is not found.\n" );
+    if ( !found_flag ) logw( stderr, "  The key is not found.\n" );
     fclose(fp);
 
     return RET_CONTINUE;
@@ -2671,11 +2611,10 @@ int ONScripter::getlogCommand()
             char *p2 = buf = new char[page->text_count];
             count = 0;
             for (int i=0 ; i<page->text_count ; i++){
-                int n = script_h.enc.getBytes(*p);
-                if (n >= 2){
-                    for (int j=0; j<n; j++)
-                        p2[count++] = *p++;
-                    i += n-1;
+                if (!ScriptDecoder::isOneByte(*p)){
+                    p2[count++] = *p++;
+                    p2[count++] = *p++;
+                    i++;
                 }
                 else if (*p != 0x0a)
                     p2[count++] = *p++;
@@ -2857,31 +2796,12 @@ int ONScripter::exec_dllCommand()
 {
     const char *buf = script_h.readStr();
     char dll_name[256];
-    unsigned int c=0, c2=0;
-    while(buf[c] != '/' && buf[c] != 0x0){
-        if (buf[c] == '\\'){
-            c++;
-            c2 = 0;
-            continue;
-        }
-        dll_name[c2++] = buf[c++];
+    unsigned int c=0;
+    while(buf[c] != '/'){
+        dll_name[c] = buf[c];
+        c++;
     }
-    dll_name[c2] = '\0';
-
-    if (strcmp(dll_name, "fileutil.dll") == 0){
-        if (strncmp(buf+c, "/mkdir", 6) == 0){
-            c += 7;
-            char *dir = new char[strlen(archive_path) + strlen(buf+c) + 1];
-            sprintf(dir, "%s%s", archive_path, buf+c);
-#if defined(LINUX) || defined(MACOSX) || defined(IOS)
-            mkdir(dir, 0755);
-#elif defined(WIN32)
-            _mkdir(dir);
-#endif
-            delete[] dir;
-        }
-        return RET_CONTINUE;
-    }
+    dll_name[c] = '\0';
 
     FILE *fp;
     if ( ( fp = fopen( dll_file, "r" ) ) == NULL ){
@@ -2999,7 +2919,13 @@ int ONScripter::endCommand()
 {
     quit();
     stopSMPEG();
+#ifdef ANDROID
+    // This is the worst in coding practice but it gets the job done
+    // This will exit the game gracefully getting caught into SDL_main
+    throw ScriptException();
+#else
     exit(0);
+#endif
     return RET_CONTINUE; // dummy
 }
 
@@ -3071,7 +2997,7 @@ int ONScripter::drawtextCommand()
     clip.x = clip.y = 0;
     clip.w = accumulation_surface->w;
     clip.h = accumulation_surface->h;
-    text_info.blendOnSurface( accumulation_surface, 0, 0, clip, layer_alpha_buf );
+    text_info.blendOnSurface( accumulation_surface, 0, 0, clip );
     
     return RET_CONTINUE;
 }
@@ -3101,7 +3027,7 @@ int ONScripter::drawsp3Command()
         ai->inv_mat[1][1] =  ai->mat[0][0] * 1000 / denom;
     }
 
-    ai->blendOnSurface2( accumulation_surface, x, y, screen_rect, layer_alpha_buf, alpha );
+    ai->blendOnSurface2( accumulation_surface, x, y, screen_rect, alpha );
     ai->setCell(old_cell_no);
 
     return RET_CONTINUE;
@@ -3123,7 +3049,7 @@ int ONScripter::drawsp2Command()
     ai->calcAffineMatrix();
     ai->setCell(cell_no);
 
-    ai->blendOnSurface2( accumulation_surface, ai->pos.x, ai->pos.y, screen_rect, layer_alpha_buf, alpha );
+    ai->blendOnSurface2( accumulation_surface, ai->pos.x, ai->pos.y, screen_rect, alpha );
 
     return RET_CONTINUE;
 }
@@ -3143,7 +3069,7 @@ int ONScripter::drawspCommand()
     clip.x = clip.y = 0;
     clip.w = accumulation_surface->w;
     clip.h = accumulation_surface->h;
-    ai->blendOnSurface( accumulation_surface, x, y, clip, layer_alpha_buf, alpha );
+    ai->blendOnSurface( accumulation_surface, x, y, clip, alpha );
     ai->setCell(old_cell_no);
 
     return RET_CONTINUE;
@@ -3173,7 +3099,7 @@ int ONScripter::drawbgCommand()
     clip.x = clip.y = 0;
     clip.w = accumulation_surface->w;
     clip.h = accumulation_surface->h;
-    bg_info.blendOnSurface( accumulation_surface, bg_info.pos.x, bg_info.pos.y, clip, layer_alpha_buf );
+    bg_info.blendOnSurface( accumulation_surface, bg_info.pos.x, bg_info.pos.y, clip );
     
     return RET_CONTINUE;
 }
@@ -3189,7 +3115,7 @@ int ONScripter::drawbg2Command()
     bi.rot     = script_h.readInt();
     bi.calcAffineMatrix();
 
-    bi.blendOnSurface2( accumulation_surface, bi.pos.x, bi.pos.y, screen_rect, layer_alpha_buf, 255 );
+    bi.blendOnSurface2( accumulation_surface, bi.pos.x, bi.pos.y, screen_rect, 255 );
 
     return RET_CONTINUE;
 }
@@ -3325,8 +3251,7 @@ int ONScripter::cselbtnCommand()
     if ( link == NULL || link->text == NULL || *link->text == '\0' )
         return RET_CONTINUE;
 
-    openFont(&csel_info);
-    csel_info.setLineArea(link->text);
+    csel_info.setLineArea( strlen(link->text)/2+1 );
     csel_info.clear();
     ButtonLink *button = getSelectableSentence( link->text, &csel_info );
     root_button_link.insert( button );
@@ -3344,7 +3269,7 @@ int ONScripter::clickCommand()
     bool lrclick_flag = false;
     if ( script_h.isName( "lrclick" ) ) lrclick_flag = true;
 
-    skip_mode &= ~SKIP_NORMAL;
+    setInternalSkipMode(false);
 
     event_mode = WAIT_TIMER_MODE | WAIT_INPUT_MODE;
     if (lrclick_flag) event_mode |= WAIT_RCLICK_MODE;
@@ -3376,7 +3301,7 @@ int ONScripter::clCommand()
     }
 
     EffectLink *el = parseEffect(true);
-    if (setEffect(el)) return RET_CONTINUE;
+    if (setEffect(el, true, true)) return RET_CONTINUE;
     while (doEffect(el));
 
     return RET_CONTINUE;
@@ -3454,31 +3379,9 @@ int ONScripter::captionCommand()
     DirectReader::convertFromSJISToUTF8(buf2, buf);
 #elif defined(LINUX) || (defined(WIN32) && defined(UTF8_CAPTION))
 #if defined(UTF8_CAPTION)
-    if (script_h.enc.getEncoding() == Encoding::CODE_UTF8)
-        strcpy(buf2, buf);
-    else
-        DirectReader::convertFromSJISToUTF8(buf2, buf);
+    DirectReader::convertFromSJISToUTF8(buf2, buf);
 #else
-    if (script_h.enc.getEncoding() == Encoding::CODE_UTF8){
-        int c = 0;
-        while(buf[0] != 0){
-            int n = script_h.enc.getBytes(buf[0]);
-            unsigned short unicode = script_h.enc.getUTF16(buf);
-            if (n == 1){
-                buf2[c++] = unicode;
-            }
-            else{
-                unsigned short sjis = convUTF162SJIS(unicode);
-                buf2[c++] = sjis >> 8;
-                buf2[c++] = sjis & 0xff;
-            }
-            buf += n;
-        }
-        buf2[c] = 0;
-    }
-    else{
-        strcpy(buf2, buf);
-    }
+    strcpy(buf2, buf);
     DirectReader::convertFromSJISToEUC(buf2);
 #endif
 #else
@@ -3576,7 +3479,7 @@ int ONScripter::btnwaitCommand()
     }
     else{
         shortcut_mouse_line = 0;
-        skip_mode &= ~SKIP_NORMAL;
+        setInternalSkipMode(false);
 
         flush( refreshMode() );
 
@@ -3862,7 +3765,7 @@ int ONScripter::bltCommand()
         }
         SDL_UnlockSurface(btndef_info.image_surface);
         SDL_UnlockSurface(accumulation_surface);
-        
+
         SDL_Rect dst_rect;
         if (dw >= 0){
             dst_rect.x = dx;
@@ -3928,7 +3831,7 @@ int ONScripter::bgCommand()
     dirty_rect.fill( screen_width, screen_height );
 
     EffectLink *el = parseEffect(true);
-    if (setEffect(el)) return RET_CONTINUE;
+    if (setEffect(el, true, true)) return RET_CONTINUE;
     while (doEffect(el));
 
     return RET_CONTINUE;
@@ -4003,7 +3906,7 @@ int ONScripter::aviCommand()
     bool click_flag = (script_h.readInt()==1)?true:false;
 
     stopBGM( false );
-    if (playAVI( save_buf, click_flag )) endCommand();
+    if (playAVI( save_buf, click_flag )) errorAndExit();
 
     // should be commented out
     //repaintCommand();
@@ -4181,10 +4084,9 @@ void ONScripter::NSDCallCommand(int texnum, const char *str1, int proc, const ch
         uchar3 color = {0xff, 0xff, 0xff};
         char *p = (char*)start[num_param-1], *p2 = (char*)start[num_param-1];
         while(*p){
-            int n = script_h.enc.getBytes(*p);
-            if (n >= 2){
-                for (int i=0; i<n; i++)
-                    *p2++ = *p++;
+            if (!ScriptDecoder::isOneByte(*p)){
+                *p2++ = *p++;
+                *p2++ = *p++;
             }
             else if (*p == '%'){
                 p++;

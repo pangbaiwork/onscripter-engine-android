@@ -366,7 +366,7 @@ void ONScripter::drawString( const char *str, uchar3 color, FontInfo *info, bool
                 }
             } else {
                 if ( checkLineBreak( str, info ) ){
-                  //  if (single_line) break;
+                    if (single_line) break;
                     info->newLine();
                     for (int i=0 ; i<indent_offset ; i++)
                         info->advanceCharInHankaku(2);

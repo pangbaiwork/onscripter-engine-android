@@ -2,7 +2,7 @@
  *
  *  LUAHandler.cpp - LUA handler for ONScripter
  *
- *  Copyright (c) 2001-2019 Ogapee. All rights reserved.
+ *  Copyright (c) 2001-2016 Ogapee. All rights reserved.
  *
  *  ogapee@aqua.dti2.ne.jp
  *
@@ -41,7 +41,7 @@ int NL_dofile(lua_State *state)
     
     unsigned long length = lh->sh->cBR->getFileLength(str);
     if (length == 0){
-        printf("cannot open %s\n", str);
+        logw(stderr, "cannot open %s\n", str);
         return 0;
     }
 
@@ -54,16 +54,16 @@ int NL_dofile(lua_State *state)
     unsigned char *p = buffer;
     unsigned char *p2 = buffer2;
     while(*p){
-        int n = lh->sh->enc.getBytes(*p);
-        for (int i=0 ; i<n; i++){
-            if (i > 0 && *p == '\\') *p2++ = '\\';
+        if (!ScriptDecoder::isOneByte(*p)){
             *p2++ = *p++;
+            if (*p == '\\') *p2++ = '\\';
         }
+        *p2++ = *p++;
     }
 
     if (luaL_loadbuffer(state, (const char*)buffer2, p2 - buffer2, str) || 
         lua_pcall(state, 0, 0, 0)){
-        printf("cannot parse %s %s\n", str, lua_tostring(state,-1));
+        logw(stderr, "cannot parse %s %s\n", str, lua_tostring(state,-1));
     }
 
     delete[] buffer;
@@ -116,6 +116,7 @@ int NSDCall(lua_State *state)
 int NSDDLL(lua_State *state)
 {
     lua_getglobal( state, ONS_LUA_HANDLER_PTR );
+    LUAHandler *lh = (LUAHandler*)lua_topointer( state, -1 );
 
     const char *str1 = luaL_checkstring( state, 1 );
     const char *str2 = luaL_checkstring( state, 2 );
@@ -1005,6 +1006,7 @@ static const struct luaL_Reg lua_lut[] = {
 static int nsutf_from_ansi(lua_State *state)
 {
     lua_getglobal( state, ONS_LUA_HANDLER_PTR );
+    LUAHandler *lh = (LUAHandler*)lua_topointer( state, -1 );
 
     const char *str = luaL_checkstring( state, 1 );
     size_t len = strlen(str)*3+1;
@@ -1022,6 +1024,7 @@ static int nsutf_from_ansi(lua_State *state)
 static int nsutf_to_ansi(lua_State *state)
 {
     lua_getglobal( state, ONS_LUA_HANDLER_PTR );
+    LUAHandler *lh = (LUAHandler*)lua_topointer( state, -1 );
 
     const char *str = luaL_checkstring( state, 1 );
     size_t len = strlen(str)*2+1;
@@ -1119,7 +1122,7 @@ void LUAHandler::loadInitScript()
 {
     unsigned long length = sh->cBR->getFileLength(INIT_SCRIPT);
     if (length == 0){
-        printf("cannot open %s\n", INIT_SCRIPT);
+        logv("cannot open %s\n", INIT_SCRIPT);
         return;
     }
 
@@ -1132,16 +1135,16 @@ void LUAHandler::loadInitScript()
     unsigned char *p = buffer;
     unsigned char *p2 = buffer2;
     while(*p){
-        int n = sh->enc.getBytes(*p);
-        for (int i=0 ; i<n; i++){
-            if (i > 0 && *p == '\\') *p2++ = '\\';
+        if (!ScriptDecoder::isOneByte(*p)){
             *p2++ = *p++;
+            if (*p == '\\') *p2++ = '\\';
         }
+        *p2++ = *p++;
     }
 
     if (luaL_loadbuffer(state, (const char*)buffer2, p2 - buffer2, INIT_SCRIPT) || 
         lua_pcall(state, 0, 0, 0)){
-        printf("cannot parse %s %s\n", INIT_SCRIPT, lua_tostring(state,-1));
+        logw(stderr, "cannot parse %s %s\n", INIT_SCRIPT, lua_tostring(state,-1));
     }
 
     delete[] buffer;

@@ -2,7 +2,7 @@
  *
  *  ONScripter_rmenu.cpp - Right click menu handler of ONScripter
  *
- *  Copyright (c) 2001-2020 Ogapee. All rights reserved.
+ *  Copyright (c) 2001-2016 Ogapee. All rights reserved.
  *
  *  ogapee@aqua.dti2.ne.jp
  *
@@ -30,6 +30,7 @@
 #define DIALOG_BUTTON_W 96
 #define DIALOG_BUTTON_H 42
 
+#ifndef ANDROID
 #if defined(ENABLE_1BYTE_CHAR) && defined(FORCE_1BYTE_CHAR)
 #define MESSAGE_SAVE_EXIST "`%s%s    Date %s/%s    Time %s:%s"
 #define MESSAGE_SAVE_EMPTY "`%s%s    ------------------------"
@@ -54,26 +55,37 @@
 #define MESSAGE_CANCEL "ƒLƒƒƒ“ƒZƒ‹"
 #endif
 
-#ifdef ANDROID
-#include <stdarg.h>
-static int osprintf(char *str, const char *format, ...)
+#else
+
+// Only used as a replacement for sprintf for failing on Android L
+// This only works with '%s' string arrays in the format. Corrects
+// the broken sprintf when format contains Asian character bytes.
+int better_sprintf(char* buffer, const char* format, ...)
 {
-    str[0] = 0;
-    va_list list;
-    va_start( list, format );
-    while(*format){
-        if (format[0] == '%' && format[1] == 's'){
-            strcat(str, va_arg(list, char*));
-            format += 2;
+    int i = 0, j = 0;
+    char* str;
+    va_list vl;
+    char c;
+
+    va_start(vl, format);
+    while((c = format[i]) != '\0') {
+        if (c == '%') {
+            str = va_arg(vl, char*);
+            if (str) {
+                while(*str != '\0') {
+                    buffer[j++] = *(str++);
+                }
+            }
+            i++;
+        } else {
+            buffer[j++] = c;
         }
-        else{
-            strncat(str, format++, 1);
-        }
+        i++;
     }
-    va_end( list );
-    return strlen(str);
+    buffer[j] = '\0';
+    va_end(vl);
+    return j;
 }
-#define sprintf osprintf
 #endif
 
 void ONScripter::enterSystemCall()
@@ -88,10 +100,8 @@ void ONScripter::enterSystemCall()
     event_mode = IDLE_EVENT_MODE;
     shelter_display_mode = display_mode;
     display_mode = DISPLAY_MODE_TEXT;
-    
-    shelter_refresh_shadow_text_mode = refresh_shadow_text_mode;
-    refresh_shadow_text_mode &= ~REFRESH_CURSOR_MODE;
-    stopAnimation( clickstr_state );
+    shelter_draw_cursor_flag = draw_cursor_flag;
+    draw_cursor_flag = false;
 }
 
 void ONScripter::leaveSystemCall( bool restore_flag )
@@ -107,7 +117,7 @@ void ONScripter::leaveSystemCall( bool restore_flag )
         root_select_link.next = shelter_select_link;
 
         event_mode = shelter_event_mode;
-        refresh_shadow_text_mode = shelter_refresh_shadow_text_mode;
+        draw_cursor_flag = shelter_draw_cursor_flag;
         if ( event_mode & WAIT_BUTTON_MODE ){
             int x = shelter_mouse_state.x * screen_device_width / screen_width;
             int y = shelter_mouse_state.y * screen_device_width / screen_width;
@@ -172,6 +182,20 @@ int ONScripter::executeSystemCall()
 
 void ONScripter::executeSystemMenu()
 {
+    // Openning system menu take a screenshot before hand
+    if ( screenshot_folder ) {
+#ifdef USE_SDL_RENDERER
+        SDL_Rect rect = {(device_width -screen_device_width)/2,
+                 (device_height-screen_device_height)/2,
+                 screen_device_width, screen_device_height};
+        SDL_LockSurface(screenshot_surface);
+        SDL_RenderReadPixels(renderer, &rect, screenshot_surface->format->format, screenshot_surface->pixels, screenshot_surface->pitch);
+        SDL_UnlockSurface(screenshot_surface);
+#else
+        SDL_BlitSurface(screen_surface, NULL, screenshot_surface, NULL);
+#endif
+    }
+
     current_font = &menu_font;
 
     if ( menuselectvoice_file_name[MENUSELECTVOICE_OPEN] )
@@ -185,7 +209,8 @@ void ONScripter::executeSystemMenu()
     menu_font.num_xy[1] = rmenu_link_num;
     menu_font.top_xy[0] = (screen_width * screen_ratio2 / screen_ratio1 - menu_font.num_xy[0] * menu_font.pitch_xy[0]) / 2;
     menu_font.top_xy[1] = (screen_height * screen_ratio2 / screen_ratio1  - menu_font.num_xy[1] * menu_font.pitch_xy[1]) / 2;
-    menu_font.setXY(0, 0);
+    menu_font.setXY( (menu_font.num_xy[0] - rmenu_link_width) / 2,
+                     (menu_font.num_xy[1] - rmenu_link_num) / 2 );
 
     RMenuLink *link = root_rmenu_link.next;
     int counter = 1;
@@ -232,15 +257,15 @@ void ONScripter::executeSystemMenu()
 
 void ONScripter::executeSystemSkip()
 {
-    skip_mode |= SKIP_NORMAL;
+    setInternalSkipMode(true);
     leaveSystemCall();
 }
 
 void ONScripter::executeSystemAutomode()
 {
-    automode_flag = true;
-    skip_mode &= ~SKIP_NORMAL;
-    printf("systemcall_automode: change to automode\n");
+    setInternalAutoMode(true);
+    setInternalSkipMode(false);
+    logv("systemcall_automode: change to automode\n");
     leaveSystemCall();
 }
 
@@ -289,49 +314,54 @@ bool ONScripter::executeSystemLoad()
 
     text_info.fill( 0, 0, 0, 0 );
 
-    int n = script_h.enc.getNum((unsigned char*)save_item_name);
-    menu_font.num_xy[0] = (n+1)/2 + 2 + 13;
-    menu_font.num_xy[1] = num_save_file + 2;
+    menu_font.num_xy[0] = (strlen(save_item_name)+1)/2+2+13;
+    menu_font.num_xy[1] = num_save_file+2;
+#if ANDROID
+    menu_font.updateFontScaling(menu_font.num_xy[0], menu_font.num_xy[1], 1);
+#endif
     menu_font.top_xy[0] = (screen_width * screen_ratio2 / screen_ratio1 - menu_font.num_xy[0] * menu_font.pitch_xy[0]) / 2;
     menu_font.top_xy[1] = (screen_height * screen_ratio2 / screen_ratio1  - menu_font.num_xy[1] * menu_font.pitch_xy[1]) / 2;
-    int n2 = script_h.enc.getNum((unsigned char*)load_menu_name);
-    menu_font.setXY((menu_font.num_xy[0]*2 - n2)/4, 0);
+    menu_font.setXY( (menu_font.num_xy[0] - strlen( load_menu_name ) / 2) / 2, 0 );
     uchar3 color = {0xff, 0xff, 0xff};
-    drawString( load_menu_name, color, &menu_font, true, accumulation_surface, NULL, &text_info );
+    drawString( load_menu_name, color, &menu_font, true, accumulation_surface, NULL, &text_info, true, true );
     menu_font.newLine();
     menu_font.newLine();
         
     flush( refreshMode() );
-        
     bool nofile_flag;
-    char *buffer = new char[menu_font.num_xy[0]*4 + 1];
+    char *buffer = new char[ strlen( save_item_name ) + 256 ];
 
     SaveFileInfo save_file_info;
     for ( unsigned int i=1 ; i<=num_save_file ; i++ ){
         searchSaveFile( save_file_info, i );
-        menu_font.setXY((menu_font.num_xy[0]*2 - (n + 15*2)) / 4);
+        menu_font.setXY( (menu_font.num_xy[0] - (strlen( save_item_name ) / 2 + 15) ) / 2 );
 
-        char *format_str = NULL;
         if ( save_file_info.valid ){
-            setStr(&format_str, MESSAGE_SAVE_EXIST, -1, true);
-            sprintf(buffer, format_str,
-                    save_item_name,
-                    save_file_info.sjis_no,
-                    save_file_info.sjis_month,
-                    save_file_info.sjis_day,
-                    save_file_info.sjis_hour,
-                    save_file_info.sjis_minute);
+#ifdef ANDROID
+            // Manual sprintf because broken on Android L with Asian characters
+            better_sprintf( buffer, MESSAGE_SAVE_EXIST,
+#else
+            sprintf( buffer, MESSAGE_SAVE_EXIST,
+#endif
+                     save_item_name,
+                     save_file_info.sjis_no,
+                     save_file_info.sjis_month,
+                     save_file_info.sjis_day,
+                     save_file_info.sjis_hour,
+                     save_file_info.sjis_minute );
             nofile_flag = false;
         }
         else{
-            setStr(&format_str, MESSAGE_SAVE_EMPTY, -1, true);
-            sprintf(buffer, format_str,
-                    save_item_name,
-                    save_file_info.sjis_no);
+#ifdef ANDROID
+            better_sprintf( buffer, MESSAGE_SAVE_EMPTY,
+#else
+            sprintf( buffer, MESSAGE_SAVE_EMPTY,
+#endif
+                     save_item_name,
+                     save_file_info.sjis_no );
             nofile_flag = true;
         }
-        if (format_str) delete[] format_str;
-        ButtonLink *button = getSelectableSentence( buffer, &menu_font, false, nofile_flag );
+        ButtonLink *button = getSelectableSentence( buffer, &menu_font, false, nofile_flag, true );
         root_button_link.insert( button );
         button->no = i;
         flush( refreshMode() );
@@ -358,12 +388,21 @@ bool ONScripter::executeSystemLoad()
         deleteButtonLink();
 
         if (executeSystemYesNo( SYSTEM_LOAD, file_no )){
+            FontInfo* oldFont = current_font;
+            int old_system_menu_mode = system_menu_mode;
             current_font = &sentence_font;
             system_menu_mode = 0; // for fadeout in mp3stopCommand()
-            if ( loadSaveFile( file_no ) )
+            if ( loadSaveFile( file_no ) ) {
+                current_font = oldFont;
+                system_menu_mode = old_system_menu_mode;
+#ifdef ANDROID
+                sendUserMessage(ANDROID_MSG_CORRUPT_SAVE_FILE);
+#endif
                 return false;
+            }
 
             leaveSystemCall( false );
+            refreshSurface(backup_surface, NULL, REFRESH_NORMAL_MODE);
             saveon_flag = true;
             internal_saveon_flag = true;
             text_on_flag = false;
@@ -403,49 +442,55 @@ void ONScripter::executeSystemSave()
 
     text_info.fill( 0, 0, 0, 0 );
 
-    int n = script_h.enc.getNum((unsigned char*)save_item_name);
-    menu_font.num_xy[0] = (n+1)/2 + 2 + 13;
-    menu_font.num_xy[1] = num_save_file + 2;
+    menu_font.num_xy[0] = (strlen(save_item_name)+1)/2+2+13;
+    menu_font.num_xy[1] = num_save_file+2;
+#if ANDROID
+    menu_font.updateFontScaling(menu_font.num_xy[0], menu_font.num_xy[1], 1);
+#endif
     menu_font.top_xy[0] = (screen_width * screen_ratio2 / screen_ratio1 - menu_font.num_xy[0] * menu_font.pitch_xy[0]) / 2;
     menu_font.top_xy[1] = (screen_height * screen_ratio2 / screen_ratio1  - menu_font.num_xy[1] * menu_font.pitch_xy[1]) / 2;
-    int n2 = script_h.enc.getNum((unsigned char*)save_menu_name);
-    menu_font.setXY((menu_font.num_xy[0]*2 - n2)/4, 0);
+    menu_font.setXY((menu_font.num_xy[0] - strlen( save_menu_name ) / 2 ) / 2, 0);
     uchar3 color = {0xff, 0xff, 0xff};
-    drawString( save_menu_name, color, &menu_font, true, accumulation_surface, NULL, &text_info );
+    drawString( save_menu_name, color, &menu_font, true, accumulation_surface, NULL, &text_info, true, true );
     menu_font.newLine();
     menu_font.newLine();
         
     flush( refreshMode() );
         
     bool nofile_flag;
-    char *buffer = new char[menu_font.num_xy[0]*4 + 1];
+    char *buffer = new char[ strlen( save_item_name ) + 256];
     
     for ( unsigned int i=1 ; i<=num_save_file ; i++ ){
         SaveFileInfo save_file_info;
         searchSaveFile( save_file_info, i );
-        menu_font.setXY((menu_font.num_xy[0]*2 - (n + 15*2)) / 4);
+        menu_font.setXY( (menu_font.num_xy[0] - (strlen( save_item_name ) / 2 + 15) ) / 2 );
 
-        char *format_str = NULL;
         if ( save_file_info.valid ){
-            setStr(&format_str, MESSAGE_SAVE_EXIST, -1, true);
-            sprintf(buffer, format_str,
-                    save_item_name,
-                    save_file_info.sjis_no,
-                    save_file_info.sjis_month,
-                    save_file_info.sjis_day,
-                    save_file_info.sjis_hour,
-                    save_file_info.sjis_minute);
+#ifdef ANDROID
+            // Manual sprintf because broken on Android L with Asian characters
+            better_sprintf( buffer, MESSAGE_SAVE_EXIST,
+#else
+            sprintf( buffer, MESSAGE_SAVE_EXIST,
+#endif
+                     save_item_name,
+                     save_file_info.sjis_no,
+                     save_file_info.sjis_month,
+                     save_file_info.sjis_day,
+                     save_file_info.sjis_hour,
+                     save_file_info.sjis_minute );
             nofile_flag = false;
         }
         else{
-            setStr(&format_str, MESSAGE_SAVE_EMPTY, -1, true);
-            sprintf(buffer, format_str,
-                    save_item_name,
-                    save_file_info.sjis_no);
+#ifdef ANDROID
+            better_sprintf( buffer, MESSAGE_SAVE_EMPTY,
+#else
+            sprintf( buffer, MESSAGE_SAVE_EMPTY,
+#endif
+                     save_item_name,
+                     save_file_info.sjis_no );
             nofile_flag = true;
         }
-        if (format_str) delete[] format_str;
-        ButtonLink *button = getSelectableSentence( buffer, &menu_font, false, nofile_flag );
+        ButtonLink *button = getSelectableSentence( buffer, &menu_font, false, nofile_flag, true );
         root_button_link.insert( button );
         button->no = i;
         flush( refreshMode() );
@@ -480,36 +525,39 @@ bool ONScripter::executeSystemYesNo( int caller, int file_no )
     text_info.fill( 0, 0, 0, 0 );
     dirty_rect.fill( screen_width, screen_height );
 
-    char name[128] = {'\0'};
-    char *format_str = NULL;
+    char name[64] = {'\0'};
     if ( caller == SYSTEM_SAVE ){
         SaveFileInfo save_file_info;
         searchSaveFile( save_file_info, file_no );
-        setStr(&format_str, MESSAGE_SAVE_CONFIRM, -1, true);
-        sprintf(name, format_str,
-                save_item_name,
-                save_file_info.sjis_no);
+#ifdef ANDROID
+        better_sprintf( name, MESSAGE_SAVE_CONFIRM,
+#else
+        sprintf( name, MESSAGE_SAVE_CONFIRM,
+#endif
+                 save_item_name,
+                 save_file_info.sjis_no );
     }
     else if ( caller == SYSTEM_LOAD ){
         SaveFileInfo save_file_info;
         searchSaveFile( save_file_info, file_no );
-        setStr(&format_str, MESSAGE_LOAD_CONFIRM, -1, true);
-        sprintf(name, format_str,
-                save_item_name,
-                save_file_info.sjis_no);
+#ifdef ANDROID
+        better_sprintf( name, MESSAGE_LOAD_CONFIRM,
+#else
+        sprintf( name, MESSAGE_LOAD_CONFIRM,
+#endif
+                 save_item_name,
+                 save_file_info.sjis_no );
     }
-    else if ( caller ==  SYSTEM_RESET ){
-        setStr(&format_str, MESSAGE_RESET_CONFIRM, -1, true);
-        strcpy(name, format_str);
-    }
-    else if ( caller ==  SYSTEM_END ){
-        setStr(&format_str, MESSAGE_END_CONFIRM, -1, true);
-        strcpy(name, format_str);
-    }
-        
-    int n = script_h.enc.getNum((unsigned char*)name);
-    menu_font.num_xy[0] = (n+1)/2;
+    else if ( caller ==  SYSTEM_RESET )
+        strcpy( name, MESSAGE_RESET_CONFIRM );
+    else if ( caller ==  SYSTEM_END )
+        strcpy( name, MESSAGE_END_CONFIRM );
+
+    menu_font.num_xy[0] = strlen(name)/2 + 1;       // Hack fix to allow Japanese message fit
     menu_font.num_xy[1] = 3;
+#if ANDROID
+    menu_font.updateFontScaling(menu_font.num_xy[0], menu_font.num_xy[1], 1);
+#endif
     menu_font.top_xy[0] = (screen_width * screen_ratio2 / screen_ratio1 - menu_font.num_xy[0] * menu_font.pitch_xy[0]) / 2;
     menu_font.top_xy[1] = (screen_height * screen_ratio2 / screen_ratio1  - menu_font.num_xy[1] * menu_font.pitch_xy[1]) / 2;
     menu_font.setXY(0, 0);
@@ -517,24 +565,20 @@ bool ONScripter::executeSystemYesNo( int caller, int file_no )
     drawString( name, color, &menu_font, true, accumulation_surface, NULL, &text_info );
 
     flush( refreshMode() );
-        
-    int offset1 = n/5;
-    int offset2 = n/2 - offset1;
-    setStr(&format_str, MESSAGE_YES, -1, true);
-    strcpy(name, format_str);
+
+    int offset1 = strlen(name)/5;
+    int offset2 = strlen(name)/2 - offset1;
+    strcpy( name, MESSAGE_YES );
     menu_font.setXY(offset1-2, 2);
     ButtonLink *button = getSelectableSentence( name, &menu_font, false );
     root_button_link.insert( button );
     button->no = 1;
 
-    setStr(&format_str, MESSAGE_NO, -1, true);
-    strcpy(name, format_str);
+    strcpy( name, MESSAGE_NO );
     menu_font.setXY(offset2, 2);
     button = getSelectableSentence( name, &menu_font, false );
     root_button_link.insert( button );
     button->no = 2;
-    
-    if (format_str) delete[] format_str;
         
     flush( refreshMode() );
         
@@ -736,15 +780,18 @@ void ONScripter::buildDialog(bool yesno_flag, const char *mes1, const char *mes2
     uchar3 col3={0, 0, 0};
     dialog_font.top_xy[0] = 7;
     dialog_font.top_xy[1] = DIALOG_HEADER+5;
+#if ANDROID
+    dialog_font.updateFontScaling((DIALOG_W-7*2)/dialog_font.pitch_xy[0], 3, 1);
+#else
     dialog_font.num_xy[0] = (DIALOG_W-7*2)/dialog_font.pitch_xy[0];
     dialog_font.num_xy[1] = 3;
+#endif
     dialog_font.clear();
     drawString( mes1, col3, &dialog_font, false, s2, NULL, NULL );
 
     dialog_font.top_xy[0] = 5;
     dialog_font.top_xy[1] = (DIALOG_HEADER-dialog_font.font_size_xy[1])/2;
-    openFont(&dialog_font);
-    dialog_font.setLineArea(mes2);
+    dialog_font.setLineArea( strlen(mes2)/2+1 );
     dialog_font.clear();
     drawString( mes2, col3, &dialog_font, false, s2, NULL, NULL );
 
@@ -756,14 +803,14 @@ void ONScripter::buildDialog(bool yesno_flag, const char *mes1, const char *mes2
     dialog_info.pos.y = (screen_height - dialog_info.pos.h)/2;
 
     // buttons
-    char* mes[2] = {NULL};
+    const char* mes[2];
     if (yesno_flag){
-        setStr(&mes[0], MESSAGE_YES, -1, true);
-        setStr(&mes[1], MESSAGE_NO, -1, true);
+        mes[0] = MESSAGE_YES;
+        mes[1] = MESSAGE_NO;
     }
     else{
-        setStr(&mes[0], MESSAGE_OK, -1, true);
-        setStr(&mes[1], MESSAGE_CANCEL, -1, true);
+        mes[0] = MESSAGE_OK;
+        mes[1] = MESSAGE_CANCEL;
     }
 
     for (int i=0 ; i<2 ; i++){
@@ -807,8 +854,7 @@ void ONScripter::buildDialog(bool yesno_flag, const char *mes1, const char *mes2
 
             dialog_font.top_xy[0] = rect.x+(rect.w-dialog_font.pitch_xy[0]*strlen(mes[i])/2)/2;
             dialog_font.top_xy[1] = rect.y+(rect.h-dialog_font.font_size_xy[1])/2;
-            openFont(&dialog_font);
-            dialog_font.setLineArea(mes[i]);
+            dialog_font.setLineArea( strlen(mes[i])/2+1 );
             dialog_font.clear();
             drawString( mes[i], col3, &dialog_font, false, bs2, NULL, NULL );
         }
@@ -829,7 +875,4 @@ void ONScripter::buildDialog(bool yesno_flag, const char *mes1, const char *mes2
 
         root_button_link.insert( btn );
     }
-    
-    delete[] mes[0];
-    delete[] mes[1];
 }

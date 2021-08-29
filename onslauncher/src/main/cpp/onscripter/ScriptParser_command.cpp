@@ -2,7 +2,7 @@
  *
  *  ScriptParser_command.cpp - Define command executer of ONScripter
  *
- *  Copyright (c) 2001-2020 Ogapee. All rights reserved.
+ *  Copyright (c) 2001-2016 Ogapee. All rights reserved.
  *
  *  ogapee@aqua.dti2.ne.jp
  *
@@ -137,6 +137,7 @@ int ScriptParser::textgosubCommand()
         errorAndExit( "textgosub: not in the define section" );
 
     setStr( &textgosub_label, script_h.readStr()+1 );
+    script_h.enableTextgosub(true);
     
     return RET_CONTINUE;
 }
@@ -321,19 +322,22 @@ int ScriptParser::savedirCommand()
 
 #if defined(LINUX) || defined(MACOSX) || defined(IOS)
         struct stat buf;
-        if ( stat( save_dir, &buf ) != 0 ){
-            fprintf(stderr, "savedir: %s doesn't exist.\n", save_dir);
-            delete[] save_dir;
-            save_dir = NULL;
-        
-            return RET_CONTINUE;
+        if ( stat_ons( save_dir, &buf ) != 0 ){
+            // Does not exist try making it
+            if (mkdir(save_dir, 00755) != 0) {
+                fprintf(stderr, "savedir: %s doesn't exist and cannot make it.\n", save_dir);
+                delete[] save_dir;
+                save_dir = NULL;
+
+                return RET_CONTINUE;
+            }
         }
 #endif
         
         script_h.setSaveDir(save_dir);
         setStr(&save_dir_envdata, path);
     }
-    
+
     return RET_CONTINUE;
 }
 
@@ -389,9 +393,8 @@ int ScriptParser::rmenuCommand()
 
         const char *buf = script_h.readStr();
         setStr( &link->next->label, buf );
-        int n = script_h.enc.getNum((const unsigned char*)buf);
-        if (rmenu_link_width < n/2 + 1)
-            rmenu_link_width = n/2 + 1;
+        if ( rmenu_link_width < strlen( buf )/2 + 1 )
+            rmenu_link_width = strlen( buf )/2 + 1;
 
         link->next->system_call_no = getSystemCallNo( script_h.readLabel() );
 
@@ -474,7 +477,7 @@ int ScriptParser::nsadirCommand()
         errorAndExit( "nsadir: not in the define section" );
 
     const char *buf = script_h.readStr();
-    
+
     if ( nsa_path ) delete[] nsa_path;
     nsa_path = new char[ strlen(buf) + 2 ];
     sprintf( nsa_path, RELATIVEPATH "%s%c", buf, DELIMITER );
@@ -492,11 +495,10 @@ int ScriptParser::nsaCommand()
     }
     
     delete script_h.cBR;
-    script_h.cBR = new NsaReader( nsa_offset, archive_path, BaseReader::ARCHIVE_TYPE_NSA|BaseReader::ARCHIVE_TYPE_NS2, key_table );
+    script_h.cBR = new NsaReader( nsa_offset, archive_path, BaseReader::ARCHIVE_TYPE_NSA|BaseReader::ARCHIVE_TYPE_NS2, key_table, use_parent_resources );
     if ( script_h.cBR->open( nsa_path ) ){
-        fprintf( stderr, " *** failed to open nsa or ns2 archive, ignored.  ***\n");
+        logw( stderr, " *** failed to open nsa or ns2 archive, ignored.  ***\n");
     }
-
     return RET_CONTINUE;
 }
 
@@ -621,27 +623,16 @@ int ScriptParser::midCommand()
     unsigned int len   = script_h.readInt();
 
     ScriptHandler::VariableData &vd = script_h.getVariableData(no);
-    if (vd.str) delete[] vd.str;
-    if (start >= strlen(save_buf)){
+    if ( vd.str ) delete[] vd.str;
+    if ( start >= strlen(save_buf) ){
         vd.str = NULL;
     }
     else{
-        unsigned int len2 = 0;
-        if (script_h.enc.getEncoding() == Encoding::CODE_UTF8){
-            for (unsigned int i=0; i<start; i++)
-                save_buf += script_h.enc.getBytes(*save_buf);
-            for (unsigned int i=0; i<len; i++)
-                len2 += script_h.enc.getBytes(save_buf[len2]);
-        }
-        else{
-            save_buf += start;
-            len2 = len;
-        }
-        if (len2 > strlen(save_buf))
-            len2 = strlen(save_buf);
-        vd.str = new char[len2+1];
-        memcpy(vd.str, save_buf, len2);
-        vd.str[len2] = '\0';
+        if ( start+len > strlen(save_buf ) )
+            len = strlen(save_buf) - start;
+        vd.str = new char[len+1];
+        memcpy( vd.str, save_buf+start, len );
+        vd.str[len] = '\0';
     }
 
     return RET_CONTINUE;
@@ -651,10 +642,20 @@ int ScriptParser::menusetwindowCommand()
 {
     menu_font.ttf_font[0]     = NULL;
     menu_font.ttf_font[1]     = NULL;
+#if ANDROID
+    int sizeX = script_h.readInt();
+    int sizeY = script_h.readInt();
+    int spaceX = script_h.readInt();
+    int spaceY = script_h.readInt();
+    menu_font.setFontParametersForScaling(sizeX, sizeY, spaceX, spaceY, 1);
+    menu_font.pitch_xy[0]     = spaceX + menu_font.font_size_xy[0];
+    menu_font.pitch_xy[1]     = spaceY + menu_font.font_size_xy[1];
+#else
     menu_font.font_size_xy[0] = script_h.readInt();
     menu_font.font_size_xy[1] = script_h.readInt();
     menu_font.pitch_xy[0]     = script_h.readInt() + menu_font.font_size_xy[0];
     menu_font.pitch_xy[1]     = script_h.readInt() + menu_font.font_size_xy[1];
+#endif
     menu_font.is_bold         = script_h.readInt()?true:false;
     menu_font.is_shadow       = script_h.readInt()?true:false;
 
@@ -827,7 +828,7 @@ int ScriptParser::itoaCommand()
 {
     bool itoa2_flag = false;
 
-    if (script_h.isName("itoa2") && script_h.enc.getEncoding() != Encoding::CODE_UTF8)
+    if ( script_h.isName( "itoa2" ) )
         itoa2_flag = true;
     
     script_h.readVariable();
@@ -837,12 +838,12 @@ int ScriptParser::itoaCommand()
 
     int val = script_h.readInt();
 
-    char val_str[30];
+    char val_str[20];
     if (itoa2_flag)
         script_h.getStringFromInteger(val_str, val, -1);
     else
-        sprintf(val_str, "%d", val);
-    setStr(&script_h.getVariableData(no).str, val_str);
+        sprintf( val_str, "%d", val );
+    setStr( &script_h.getVariableData(no).str, val_str );
     
     return RET_CONTINUE;
 }
@@ -1002,7 +1003,7 @@ int ScriptParser::gotoCommand()
     return RET_CONTINUE;
 }
 
-void ScriptParser::gosubReal( const char *label, char *next_script, bool textgosub_flag, bool pretextgosub_flag )
+void ScriptParser::gosubReal( const char *label, char *next_script, bool textgosub_flag )
 {
     last_nest_info->next = new NestInfo();
     last_nest_info->next->previous = last_nest_info;
@@ -1010,7 +1011,6 @@ void ScriptParser::gosubReal( const char *label, char *next_script, bool textgos
     last_nest_info = last_nest_info->next;
     last_nest_info->next_script = next_script;
     last_nest_info->textgosub_flag = textgosub_flag;
-    last_nest_info->pretextgosub_flag = pretextgosub_flag;
 
     setCurrentLabel( label );
 }
@@ -1415,14 +1415,14 @@ int ScriptParser::arcCommand()
 
     if ( strcmp( script_h.cBR->getArchiveName(), "direct" ) == 0 ){
         delete script_h.cBR;
-        script_h.cBR = new SarReader( archive_path, key_table );
+        script_h.cBR = new SarReader( archive_path, key_table, use_parent_resources );
         if ( script_h.cBR->open( buf2 ) ){
-            fprintf( stderr, " *** failed to open archive %s, ignored.  ***\n", buf2 );
+            logw( stderr, " *** failed to open archive %s, ignored.  ***\n", buf2 );
         }
     }
     else if ( strcmp( script_h.cBR->getArchiveName(), "sar" ) == 0 ){
         if ( script_h.cBR->open( buf2 ) ){
-            fprintf( stderr, " *** failed to open archive %s, ignored.  ***\n", buf2 );
+            logw( stderr, " *** failed to open archive %s, ignored.  ***\n", buf2 );
         }
     }
     // skip "arc" commands after "ns?" command

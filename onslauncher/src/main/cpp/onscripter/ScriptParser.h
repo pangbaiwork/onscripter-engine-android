@@ -2,7 +2,7 @@
  * 
  *  ScriptParser.h - Define block parser of ONScripter
  *
- *  Copyright (c) 2001-2020 Ogapee. All rights reserved.
+ *  Copyright (c) 2001-2016 Ogapee. All rights reserved.
  *
  *  ogapee@aqua.dti2.ne.jp
  *
@@ -29,6 +29,7 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#include <sys/stat.h>
 
 #include "ScriptHandler.h"
 #include "NsaReader.h"
@@ -44,6 +45,7 @@
 #endif
 
 #define DEFAULT_FONT_SIZE 26
+#define DEFAULT_SENTENCE_SCALE 1
 #define DEFAULT_DIALOG_FONT_SIZE 18
 
 #define DEFAULT_LOOKBACK_NAME0 "uoncur.bmp"
@@ -67,7 +69,7 @@ public:
     void reset();
     int  openScript();
     void setCurrentLabel( const char *label );
-    void gosubReal( const char *label, char *next_script, bool textgosub_flag=false, bool pretextgosub_flag=false );
+    void gosubReal( const char *label, char *next_script, bool textgosub_flag=false );
     int getStringBufferOffset(){return string_buffer_offset;};
 
     FILE *fopen(const char *path, const char *mode, bool use_save_dir=false);
@@ -166,7 +168,7 @@ public:
     int arcCommand();
     int addkinsokuCommand();
     int addCommand();
-    
+
 protected:
     struct UserFuncLUT{
         struct UserFuncLUT *next;
@@ -194,14 +196,12 @@ protected:
         int  nest_mode;
         char *next_script; // used in gosub and for
         int  var_no, to, step; // used in for
-        bool textgosub_flag; // used in textgosub
-        bool pretextgosub_flag; // used in pretextgosub
+        bool textgosub_flag; // used in textgosub and pretextgosub
 
         NestInfo(){
             previous = next = NULL;
             nest_mode = LABEL;
             textgosub_flag = false;
-            pretextgosub_flag = false;
         };
     } last_tilde;
 
@@ -254,6 +254,8 @@ protected:
     bool zenkakko_flag;
     bool pagetag_flag;
     int  windowchip_sprite_no;
+
+    bool use_parent_resources;
     
     int string_buffer_offset;
 
@@ -278,7 +280,7 @@ protected:
     char *save_dir_envdata;
 
     void deleteNestInfo();
-    void setStr( char **dst, const char *src, int num = -1, bool to_utf8 = false );
+    void setStr( char **dst, const char *src, int num=-1 );
     
     void readToken();
 
@@ -338,11 +340,11 @@ protected:
     struct SaveFileInfo{
         bool valid;
         int  month, day, hour, minute;
-        char sjis_no[7];
-        char sjis_month[7];
-        char sjis_day[7];
-        char sjis_hour[7];
-        char sjis_minute[7];
+        char sjis_no[5];
+        char sjis_month[5];
+        char sjis_day[5];
+        char sjis_hour[5];
+        char sjis_minute[5];
     };
     unsigned int num_save_file;
     char *save_menu_name;
@@ -390,7 +392,6 @@ protected:
             return ch;
         };
     } *page_list, *start_page, *current_page; // ring buffer
-    int  current_read_language;
     int  max_page_list;
     int  clickstr_line;
     int  clickstr_state;
@@ -402,14 +403,21 @@ protected:
     bool english_mode;
 
     struct Kinsoku {
-        unsigned short unicode;
+        char chr[2];
     } *start_kinsoku, *end_kinsoku;
     bool is_kinsoku;
     int num_start_kinsoku, num_end_kinsoku;
-    void setKinsoku(const char *start_chrs, const char *end_chrs, bool add, int code = -1);
+    void setKinsoku(const char *start_chrs, const char *end_chrs, bool add);
     bool isStartKinsoku(const char *str);
     bool isEndKinsoku(const char *str);
-    
+#ifdef ANDROID
+    static const char* DEFAULT_SAVE_MENU_NAME;
+    static const char* DEFAULT_LOAD_MENU_NAME;
+    static const char* DEFAULT_SAVE_ITEM_NAME;
+
+    void setMenuLanguage(const char* languageStr);
+#endif
+
     /* ---------------------------------------- */
     /* Sound related variables */
     int music_volume;
@@ -491,18 +499,19 @@ protected:
     unsigned char convHexToDec( char ch );
     void readColor( uchar3 *color, const char *buf );
     
-    void errorAndExit( const char *str, const char *reason=NULL );
+    void errorAndExit();
+    void errorAndExit( const char *fmt, ... );
 
     void allocFileIOBuf();
     int saveFileIOBuf( const char *filename, int offset=0, const char *savestr=NULL );
-    size_t loadFileIOBuf( const char *filename );
+    size_t loadFileIOBuf( const char *filename, size_t *outSize=NULL );
 
     void writeChar( char c, bool output_flag );
     char readChar();
     void writeInt( int i, bool output_flag );
     int readInt();
     void writeStr( char *s, bool output_flag );
-    void readStr( char **s );
+    void readStr( char **s = NULL );
     void writeVariables( int from, int to, bool output_flag );
     void readVariables( int from, int to );
     void writeArrayVariable( bool output_flag );

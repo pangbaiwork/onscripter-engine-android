@@ -2,7 +2,7 @@
  * 
  *  ScriptHandler.h - Script manipulation class
  *
- *  Copyright (c) 2001-2020 Ogapee. All rights reserved.
+ *  Copyright (c) 2001-2016 Ogapee. All rights reserved.
  *
  *  ogapee@aqua.dti2.ne.jp
  *
@@ -28,10 +28,23 @@
 #include <stdlib.h>
 #include <string.h>
 #include "BaseReader.h"
-#include "Encoding.h"
+#include "ScriptDecoder.h"
+#include "ScriptException.h"
 
-#define IS_TWO_BYTE(x) \
-        ( ((x) & 0xe0) == 0xe0 || ((x) & 0xe0) == 0x80 )
+#ifdef ANDROID
+#include "MenuText.h"
+#endif
+
+#ifdef ENABLE_ENGLISH
+#define ENABLE_1BYTE_CHAR
+#define FORCE_1BYTE_CHAR
+#endif
+
+#ifdef ENABLE_KOREAN
+// To avoid crashing (Korean) games, this label is usually used to exit the game
+#define KOREAN_LABEL_END "l_offyo"
+#define KOREAN_LABEL_END2 "l_testnano"
+#endif
 
 typedef unsigned char uchar3[3];
 
@@ -121,8 +134,8 @@ public:
     char *saveStringBuffer();
     void addStringBuffer( char ch );
     
-    // function for direct manipulation of script address
-    inline char *getCurrent(bool use_script=false){ return (use_script && !is_internal_script)?last_script_context->current_script:current_script; };
+    // function for direct manipulation of script address 
+    inline char *getCurrent(bool use_script=false){ return (use_script && is_internal_script)?last_script_context->current_script:current_script; };
     inline char *getNext(){ return next_script; };
     inline char *getWait(){ return wait_script?wait_script:next_script; };
     void setCurrent(char *pos);
@@ -143,14 +156,16 @@ public:
     bool isName( const char *name );
     bool isText();
     bool compareString( const char *buf );
-    void setEndStatus(int val, bool replace=false){
-        if (replace) end_status = val;
-        else end_status |= val;
-    };
+    void setEndStatus(int val){ end_status |= val; };
     inline int getEndStatus(){ return end_status; };
     void skipLine( int no=1 );
     void setLinepage( bool val );
     void setEnglishMode( bool val ){ english_mode = val; };
+#ifdef ANDROID
+    void setSystemLanguage(const char* languageStr);
+    MenuTextBase* getSystemLanguageText() { return menuText; };
+    void setRootWritableDir(char const* path);
+#endif
 
     // function for kidoku history
     bool isKidoku();
@@ -163,6 +178,7 @@ public:
     void addIntVariable(char **buf);
     void declareDim();
 
+    void enableTextgosub(bool val);
     void setClickstr( const char *list );
     int  checkClickstr(const char *buf, bool recursive_flag=false);
 
@@ -177,7 +193,8 @@ public:
 
     LabelInfo lookupLabel( const char* label );
     LabelInfo lookupLabelNext( const char* label );
-    void errorAndExit( const char *str );
+    void errorAndExit();
+    void errorAndExit( const char *fmt, ... );
 
     ArrayVariable *getRootArrayVariable();
     void loadArrayVariable( FILE *fp );
@@ -240,11 +257,10 @@ public:
     int screen_height;
     int variable_range;
     int global_variable_border;
-    int current_language;
 
     BaseReader *cBR;
-    Encoding enc;
-    
+
+    ScriptDecoder* decoder;
 private:
     enum { OP_INVALID = 0, // 000
            OP_PLUS    = 2, // 010
@@ -347,6 +363,7 @@ private:
     bool text_flag; // true if the current token is text
     int  end_status;
     bool linepage_flag;
+    bool textgosub_flag;
     char *clickstr_list;
     bool english_mode;
 
@@ -362,6 +379,10 @@ private:
 
     unsigned char key_table[256];
     bool key_table_flag;
+
+#ifdef ANDROID
+    MenuTextBase* menuText;
+#endif
 };
 
 #endif // __SCRIPT_HANDLER_H__

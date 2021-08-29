@@ -2,7 +2,7 @@
 /*
  *  DirectReader.cpp - Reader from independent files
  *
- *  Copyright (c) 2001-2018 Ogapee. All rights reserved.
+ *  Copyright (c) 2001-2016 Ogapee. All rights reserved.
  *
  *  ogapee@aqua.dti2.ne.jp
  *
@@ -48,11 +48,12 @@ extern unsigned short convUTF8ToUTF16( const char **src );
 #define N (1 << EI)  /* buffer size */
 #define F ((1 << EJ) + P)  /* lookahead buffer size */
 
-DirectReader::DirectReader( const char *path, const unsigned char *key_table )
+DirectReader::DirectReader( const char *path, const unsigned char *key_table, bool try_parent )
 {
     file_full_path = NULL;
     file_sub_path = NULL;
     file_path_len = 0;
+    try_parent_flag = try_parent;
 
     capital_name = new char[MAX_FILE_NAME_LENGTH*2+1];
     capital_name_tmp = new char[MAX_FILE_NAME_LENGTH*3+1];
@@ -285,7 +286,6 @@ int DirectReader::getRegisteredCompressionType( const char *file_name )
 struct DirectReader::FileInfo DirectReader::getFileByIndex( unsigned int index )
 {
     DirectReader::FileInfo fi;
-    memset(&fi, 0, sizeof(DirectReader::FileInfo));
     
     return fi;
 }
@@ -312,10 +312,17 @@ FILE *DirectReader::getFileHandle( const char *file_name, int &compression_type,
     len = strlen(capital_name);
 #elif defined(LINUX)
     convertFromSJISToEUC(capital_name);
-#endif    
+#endif
 
     *length = 0;
-    if ( (fp = fopen( capital_name, "rb" )) != NULL && len >= 3 ){
+    if ( (fp = fopen( capital_name, "rb" )) == NULL && try_parent_flag ) {
+        // Read the parent folder for file if does not exist
+        strncpy(capital_name_tmp, "../", 3);
+        strncpy(capital_name_tmp + 3, capital_name, len);
+        capital_name_tmp[ len + 3 ] = '\0';
+        fp = fopen( capital_name_tmp, "rb" );
+    }
+    if ( fp != NULL && len >= 3 ){
         compression_type = getRegisteredCompressionType( capital_name );
         if ( compression_type == NBZ_COMPRESSION || compression_type == SPB_COMPRESSION ){
             *length = getDecompressedFileLength( compression_type, fp, 0 );
@@ -437,7 +444,7 @@ void DirectReader::convertFromUTF8ToSJIS( char *dst_buf, const char *src_buf )
 size_t DirectReader::decodeNBZ( FILE *fp, size_t offset, unsigned char *buf )
 {
     if (key_table_flag)
-        fprintf(stderr, "may not decode NBZ with key_table enabled.\n");
+        logw(stderr, "may not decode NBZ with key_table enabled.\n");
     
     unsigned int original_length, count;
 	BZFILE *bfp;
